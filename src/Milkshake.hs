@@ -169,15 +169,21 @@ milkshake MilkshakeConfig{..} =
     -- build
     ----------------------------------------------------------------------------
     phony "build" $ do
-        css <- map (mscBuildDirectory </>) <$> getDirectoryFiles "" [mscCSSDirectory </> "*.css"]
-        need css
+        hasCSS <- doesDirectoryExist mscCSSDirectory
+        when hasCSS $ do
+          css <- map (mscBuildDirectory </>) <$> getDirectoryFiles "" [mscCSSDirectory </> "*.css"]
+          need css
 
-        imgs <- map (mscBuildDirectory </>) <$> getDirectoryFiles "" [mscImagesDirectory </> "*.*"]
-        need imgs
+        hasImgs <- doesDirectoryExist mscImagesDirectory
+        when hasImgs $ do
+          imgs <- map (mscBuildDirectory </>) <$> getDirectoryFiles "" [mscImagesDirectory </> "*.*"]
+          need imgs
 
-        markdownPages <- getDirectoryFiles mscContentDirectory ["//*.md"]
-        let pages = map ((-<.> "html") . (mscBuildDirectory </>)) markdownPages
-        need pages
+        hasPages <- doesDirectoryExist mscContentDirectory
+        when hasPages $ do
+          markdownPages <- getDirectoryFiles mscContentDirectory ["//*.md"]
+          let pages = map ((-<.> "html") . (mscBuildDirectory </>)) markdownPages
+          need pages
     ---------------------------------------------------------------------------
     -- Helpers
     ---------------------------------------------------------------------------

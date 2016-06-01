@@ -14,4 +14,4 @@
   commands:
   - stack exec milkshake clean
   - stack exec milkshake build
-  - stack exec milkshake yaml:content/connect/index.md
+  - stack exec milkshake yaml:content/index.md
