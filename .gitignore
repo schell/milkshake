@@ -1,0 +1,9 @@
+.DS_Store
+.cabal-sandbox
+_cache
+_site
+cabal.sandbox.config
+dist/
+*.sw[a-z]
+.stack-work
+build/

@@ -1,0 +1,17 @@
+- patterns: 
+  - \.cabal$
+  - .*\.hs$
+  commands:
+  - stack build --fast
+  - hlint \0
+- patterns: 
+  - ^templates/.*\.html$
+  - content/.*\.(md|lhs)$
+  - \.cabal$ 
+  - .*\.hs$
+  - ^css/.*\.css$
+  - .*\.yaml$
+  commands:
+  - stack exec milkshake clean
+  - stack exec milkshake build
+  - stack exec milkshake yaml:content/connect/index.md

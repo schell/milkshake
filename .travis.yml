@@ -1,0 +1,30 @@
+sudo: false
+language: c
+addons:
+  apt:
+    packages:
+    - libgmp-dev
+before_install:
+- mkdir -p ~/.local/bin
+- export PATH=$HOME/.local/bin:$PATH
+- travis_retry curl -L https://www.stackage.org/stack/linux-x86_64 | tar xz --wildcards
+  --strip-components=1 -C ~/.local/bin '*/stack'
+script:
+- stack --no-terminal --install-ghc build
+- stack exec milkshake clean
+- stack exec milkshake build
+cache:
+  directories:
+  - "$HOME/.stack"
+deploy:
+  provider: s3
+  access_key_id: AKIAIB4TRPCPHVWPFRCA
+  secret_access_key:
+    secure: pLVdVsYw0E8MAne/1SgY/6XcAOlS6xnfG3FWin8G6uTIVfUSX8EB7qo6xUkogmrZhxvkWYV4xZgr+8zaGjLaj5kvDoNXuAul2uHCm/ALmecMB/Dgoojx/4SxkVa8Bd9DNaA4a2hVjEyv1iLaV/pC8IwDLV+iafLf6JZ4N7BUHwhKBc16CkaotsQlzTz3l6LgXGaspzmchpUud2VJguFbO64rSvHp3tluItbG3kS6dp+Qz7ZAs7ikh37yC2Bfe22NBCpPwzvGq0uJRniXaSRliZKtOyBgGZeSDn6nphNLBvbTOYktlG16Enff1/DpEJbflUXcnWZcIekcqb42JoDlqQwbH+1CblAj8DvUMiZjz6kH8S2tmJzT1cK/RAqkDxPbKcEVz08WI6ta7LcLmKA/COu2F+UUw8x/9i5HPkzTE5MdPtT2RY5wAhqUEhAjxZFPa/oTlZ92M7pPO5P8/1tpWertTlmR3VEpWoMX4FAOiv3w1tL6rF0d9WHfP8ThwkN8h0lZVRJyTgNWG2r/EYy5uFqoXCtLUwXRBjYZVSGX+xYHF0BbICuDnXv4z7c+HiJaMd5saZ3OaGnkDF8S/hIqupkTFO/NuXjRnjR6s7QMRUCxJ8TSshqyjiLywaCmbnDlGNhqzDHOAkBKnfKYl7ewoRHVuJUnCRWqh6Ee+Kt4aE8=
+  bucket: milkshake.com
+  local-dir: build
+  acl: public_read
+  region: us-west-1
+  skip_cleanup: true
+  on:
+    repo: schell/milkshake
