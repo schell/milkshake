@@ -1,4 +1,2 @@
-hendley hardgoods
-=================
-This is the site generator for milkshake.com. It is written in Haskell
-using the great build system, Shake.
+# milkshake
+Website CMS built on Shake, github and Travis-CI.
