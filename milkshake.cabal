@@ -46,48 +46,54 @@ build-type:          Simple
 -- extra-source-files:
 
 -- Constraint on the version of Cabal needed to build this package.
-cabal-version:       >=1.10
+cabal-version:     >=1.10
 
 
 library
-  ghc-options:         -Wall -threaded
+  ghc-options:     -Wall -threaded
 
-  exposed-modules: Milkshake
+  exposed-modules: Milkshake.Types, Milkshake.Compile
 
   -- LANGUAGE extensions used by modules in this package.
   -- other-extensions:
 
   -- Other library packages from which modules are imported.
-  build-depends:   base >=4.8 && <4.9
-                 , shake 
-                 , time 
-                 , lucid 
-                 , filepath 
-                 , pandoc 
-                 , process 
-                 , transformers 
-                 , text 
-                 , bytestring 
-                 , blaze-html 
-                 , blaze-markup 
-                 , blaze-builder 
-                 , containers 
-                 , yaml 
-                 , aeson 
+  build-depends:   base >=4.8 && <5.0
+                 , shake
+                 , amazonka
+                 , amazonka-s3
+                 , amazonka-cloudfront
+                 , time
+                 , lucid
+                 , filepath
+                 , directory
+                 , pandoc
+                 , process
+                 , transformers
+                 , text
+                 , bytestring
+                 , blaze-html
+                 , blaze-markup
+                 , blaze-builder
+                 , containers
+                 , yaml
+                 , aeson
                  , aeson-pretty
-                 , http-client 
-                 , http-conduit 
-                 , conduit 
-                 , conduit-extra 
-                 , resourcet 
-                 , attoparsec 
-                 , unordered-containers 
+                 , http-client
+                 , http-client-tls
+                 , http-conduit
+                 , conduit
+                 , conduit-extra
+                 , resourcet
+                 , attoparsec
+                 , unordered-containers
                  , mtl
                  , pandoc-types
                  , texmath
                  , HTTP
                  , network-uri
                  , xml
+                 , optparse-applicative
 
   -- Directories containing source files.
   hs-source-dirs:      src
@@ -96,9 +102,9 @@ library
   default-language:    Haskell2010
 
 executable milkshake
-  ghc-options: -Wall -threaded
-  hs-source-dirs: app
   main-is: Main.hs
-  default-language: Haskell2010
-  build-depends:   base >=4.8 && <4.9
+  build-depends:   base >=4.8 && < 5.0
                  , milkshake
+  default-language: Haskell2010
+  hs-source-dirs: app
+  ghc-options: -Wall -threaded

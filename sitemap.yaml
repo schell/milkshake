@@ -1,0 +1,18 @@
+dirFiles:
+- pageOp: PageOpPandoc
+  pageMeta: {}
+  pageName: index.html
+  pageSourcePath:
+    localPath: content/index.md
+dirSubdirs:
+- dirCopiedFrom: img
+- dirCopiedFrom: css
+- dirFiles:
+  - pageOp: PageOpPandoc
+    pageMeta: {}
+    pageName: index.html
+    pageSourcePath:
+      remotePath: https://raw.githubusercontent.com/schell/odin/8c7296fbd95bd92a40aedb06938c76174fe3e699/src/Part-One.lhs
+  dirSubdirs: []
+  dirName: article
+dirName: root

@@ -1,7 +1,6 @@
 ---
-title: milkshake example 
+title: milkshake example
 author: schell
-theme: raw
-list: [0,1,2,3]
+theme: templates/raw.html
 ---
-This is a milkshake example.
+This is a milkshake example. Here we will link to a [subdir](/article)

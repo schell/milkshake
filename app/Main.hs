@@ -1,4 +1,7 @@
-import Milkshake
+module Main where
+
+import           Milkshake.Compile
+import           System.Environment
 
 main :: IO ()
-main = defaultMilkshake
+main = getArgs >>= run

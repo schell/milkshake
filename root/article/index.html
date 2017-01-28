@@ -1,0 +1,259 @@
+<html><head><title>Part One - Infrastructure with GLFW</title></head><body><p><em>tl;dr</em> This is part of a series where we’ll be writing a roguelike using FRP and Haskell. This first article is about setting up the main loop and rendering.</p>
+<h1 id="intro">Intro</h1>
+<p>I’d like to learn how to write a push based FRP implementation and so I decided I would first take a stab at flipping my pull based FRP into a pushy one. My FRP is called <a href="http://hackage.haskell.org/package/varying">varying</a>. It’s very simple and inspired by <a href="http://hackage.haskell.org/package/netwire">netwire</a>. It uses automatons to generate a stream of varying values - hence the name. For info on the core concepts of varying check out the <a href="http://hackage.haskell.org/package/varying/docs/Control-Varying-Core.html">hackage docs</a>. <a href="http://hackage.haskell.org/package/varying">varying</a> is a rather squishy FRP (and I use the term FRP liberally) but it’s fun and simple. In this article we’ll be building a quick demo ‘game’ to demonstrate how to set up the infrastructure needed for a bigger application.</p>
+<h2 id="get-the-code">Get the Code</h2>
+<p>This is a Literate Haskell file which can be downloaded from the <a href="https://github.com/schell/odin">github repo</a>. To build, run <code>stack build</code> from the project directory. <a href="http://docs.haskellstack.org/en/stable/README.html">Go here</a> for help with <code>stack</code>.</p>
+<h1 id="main">Main</h1>
+<blockquote>
+<p>– | – Module: Main – Copyright: (c) 2015 Schell Scivally – License: MIT – – The entrypoint to part-one of the odin series. module Main where</p>
+</blockquote>
+<p>Our first import is <a href="http://hackage.haskell.org/package/varying">varying</a>, which allows us to describe values that change over time and user input.</p>
+<blockquote>
+<p>import Control.Varying</p>
+</blockquote>
+<p>Next up is the graphics library <a href="http://github.com/schell/gelatin/tree/master/gelatin-picture">gelatin-picture</a>, which we use to describe two dimensional pictures. Since we’ll be rendering for desktop with glfw we will use <a href="http://github.com/schell/gelatin/tree/master/gelatin-glfw">gelatin-glfw</a>. It’s currently the only backend for gelatin.<br />
+<a href="http://github.com/schell/gelatin/tree/master/gelatin-glfw">gelatin-glfw</a> re-exports <a href="http://hackage.haskell.org/package/GLFW-b">GLFW-b</a> and <a href="http://github.com/schell/gelatin/tree/master/gelatin-picture">gelatin-picture</a> so we don’t have to clutter our workspace with those imports.</p>
+<blockquote>
+<p>import Gelatin.GLFW</p>
+</blockquote>
+<p>Next we’ll need some infrastructure in the form of <code>TVar</code> and <code>WriterT</code>. We’ll use <code>TVar</code>s to synchronize updates across threads and <code>WriterT</code> to allow our network entities to reach out to the world and each other.</p>
+<blockquote>
+<p>import Control.Concurrent import Control.Concurrent.Async import Control.Concurrent.STM.TVar import Control.Monad.STM import Control.Monad.Trans.Writer.Strict import Control.Monad</p>
+</blockquote>
+<p>Lastly we’ll need some miscellaneous bits and pieces.</p>
+<blockquote>
+<p>import Data.Bits ((.|.)) import Data.Time.Clock import qualified Data.Set as S import System.Exit</p>
+</blockquote>
+<h1 id="types">Types</h1>
+<p>We need to be able to describe our game and since this is Haskell we’ll use lots of types.</p>
+<p><code>UserInput</code> will represent everything we want to push into our FRP network. If our game or display logic needs to know about it, it should be covered by <code>UserInput</code>.</p>
+<blockquote>
+<p>data UserInput = InputUnknown String | InputTime Float | InputCursor Float Float | InputWindowSize Int Int deriving (Show)</p>
+</blockquote>
+<p><code>UserInput</code> is a monoid of sorts - each new event replaces an old one unless the new one is <code>InputUnknown</code>. An empty event is <code>InputUnknown</code>. We need this to use <code>stepMany</code> during [the network step][#the-network-step], because <code>stepMany</code> requires a Monoid instance.</p>
+<blockquote>
+<p>instance Monoid UserInput where mappend a (InputUnknown <em>) = a mappend </em> b = b mempty = InputUnknown “”</p>
+</blockquote>
+<p>We use <code>OutputEvent</code> with <code>WriterT</code> to allow entities within our network to have a very managed effect on the network as a whole.</p>
+<blockquote>
+<p>data OutputEvent = OutputEventUnknown String | OutputNeedsUpdate deriving (Ord, Eq)</p>
+</blockquote>
+<blockquote>
+<p>type Effect = Writer [OutputEvent]</p>
+</blockquote>
+<p>We’ll be rendering <code>Picture</code>s from <a href="http://github.com/schell/gelatin/tree/master/gelatin-picture">gelatin-picture</a> using <code>Font</code>s provided by <a href="http://hackage.haskell.org/package/FontyFruity">FontyFruity</a>. <a href="http://hackage.haskell.org/package/FontyFruity">FontyFruity</a> is also re-exported by gelatin’s glfw backend. We’ll talk more about rendering in the [rendering][#rendering] section.</p>
+<blockquote>
+<p>type Pic = Picture Font ()</p>
+</blockquote>
+<p>The <code>Network</code> is a varying value. This means that it represents a value that changes over some domain. When you see the type of a varying value as <code>VarT m a b</code> it means that an output value <code>b</code> varies over input <code>a</code> within an effect <code>m</code>. <a href="http://hackage.haskell.org/package/varying">varying</a> is an arrowized FRP implementation with a twist, so if you’ve ever used <a href="http://hackage.haskell.org/package/netwire">netwire</a> you’ll be a bit familiar. Some differences between <a href="http://hackage.haskell.org/package/varying">varying</a> and <a href="http://hackage.haskell.org/package/netwire">netwire</a> are</p>
+<ul>
+<li><a href="http://hackage.haskell.org/package/varying">varying</a>’s inhibition is explicit using the type <code>VarT m a (Event b)</code>.</li>
+<li><a href="http://hackage.haskell.org/package/varying">varying</a>’s time is not encoded in its type.</li>
+</ul>
+<p>Here our <code>Network</code> is defined as a varying value that depends on <code>UserInput</code>s and produces a <code>Pic</code> inside the <code>Effect</code> monad. The <code>Effect</code> monad allows our network streams to call out to the rest of the world, writing attempted side-effects to the network as a whole through our <code>WriterT</code> monad stack.</p>
+<blockquote>
+<p>type Network = VarT Effect UserInput Pic</p>
+</blockquote>
+<h1 id="rendering">Rendering</h1>
+<p>In order to render a frame we’ll need a function that uses our resources the window reference to paint a <code>Pic</code> to the screen. The pic is created by our network each frame and each time we paint a frame update we’ll get back a cache of updated renderers.</p>
+<blockquote>
+<p>renderFrame :: Window -&gt; Rez -&gt; Cache IO Transform -&gt; Pic -&gt; IO (Cache IO Transform) renderFrame window rez cache pic = do</p>
+</blockquote>
+<p>Just like any other opengl app we need to set the viewport and clear our buffers before updating the screen.</p>
+<blockquote>
+<p>(fbw,fbh) &lt;- ctxFramebufferSize $ rezContext rez glViewport 0 0 (fromIntegral fbw) (fromIntegral fbh) glClear $ GL_COLOR_BUFFER_BIT .|. GL_DEPTH_BUFFER_BIT</p>
+</blockquote>
+<p>Now we render our data using <code>renderPrims</code> and <code>pictureToR2Primitives</code>. Defined in <a href="http://hackage.haskell.org/package/renderable">renderable</a> and <a href="http://github.com/schell/gelatin/tree/master/gelatin-picture">gelatin-picture</a> respectively, they do most of the heavy lifting for us. <code>pictureToR2Primitives</code> turns our <code>Pic</code> into renderable primitives - colored and textured lines and triangles. <code>renderPrims</code> renders the list of primitives and returns a new cache, allocating new renderings for us on-the-fly and cleaning up resources previously allocated by now stale renderers.</p>
+<blockquote>
+<p>newCache &lt;- renderPrims rez cache $ pictureToR2Primitives pic</p>
+</blockquote>
+<p>Now swap the buffers on our OpenGL window and return the new cache.</p>
+<blockquote>
+<p>swapBuffers window shouldClose &lt;- windowShouldClose window if shouldClose then exitSuccess else threadDelay 100 return newCache</p>
+</blockquote>
+<h1 id="a-bit-more-infrastructure">A Bit More Infrastructure</h1>
+<p>Finally we can declare our main infrastructure type, <code>AppData</code>. An <code>AppData</code> contains the <code>Network</code> in its current state, a cache of renderers that will be managed by <a href="http://hackage.haskell.org/package/renderable">renderable</a>, and a list of user input events.</p>
+<blockquote>
+<p>data AppData = AppData { appNetwork :: Network , appCache :: Cache IO Transform , appEvents :: [UserInput] , appUTC :: UTCTime }</p>
+</blockquote>
+<h1 id="the-network">The Network</h1>
+<p>We need a network to test our infrastructure, so for now we’ll use the simplest network I can think of that demonstrates change over time and user input - a circle that follows the mouse, changing shape and color over time.</p>
+<h2 id="cursor-move-events">Cursor Move Events</h2>
+<p>In order to do this we’ll first need a stream of cursor move events. We’ll be using <code>V2 Float</code> from <a href="http://hackage.haskell.org/package/linear">linear</a> to represent our points.</p>
+<blockquote>
+<p>cursorMoved :: (Applicative m, Monad m) =&gt; VarT m UserInput (Event (V2 Float))</p>
+</blockquote>
+<p>This type signature shows that our stream will ‘consume’ user input and ‘emit’ position events.</p>
+<p>For the implementation we use the <code>var</code> constructor to turn a pure function into a stream</p>
+<blockquote>
+<p>cursorMoved = var f – :: VarT m InputEvent (Maybe (V2 Float))</p>
+</blockquote>
+<p>and then combine that with the event generator <code>onJust</code> which takes a <code>Maybe a</code> as input and produces a stream of <code>Event a</code>. We also use the plug right <code>~&gt;</code> combinator to plug the output of <code>var f</code> into the input of <code>onJust</code>.</p>
+<blockquote>
+<pre><code>~&gt; onJust</code></pre>
+</blockquote>
+<p>And now we write our function that maps input values to <code>Maybe (V2 Float)</code>.</p>
+<blockquote>
+<pre><code>where f (InputCursor x y) = Just $ V2 x y
+      f _ = Nothing</code></pre>
+</blockquote>
+<h2 id="cursor-position">Cursor Position</h2>
+<p>Next we need a stream that produces the current cursor position each frame. Until the cursor moves we need a default cursor position. <code>V2 -1 -1</code> seems pretty good.</p>
+<blockquote>
+<p>cursorPosition :: (Applicative m, Monad m) =&gt; VarT m UserInput (V2 Float) cursorPosition = cursorMoved ~&gt; foldStream (_ v -&gt; v) (-1)</p>
+</blockquote>
+<p><code>foldStream</code> works just like <code>foldl</code>, but it only operates on streams of Events, folding event values into an accumulator. In this case the accumulator is simply the latest cursor position.</p>
+<h2 id="time-deltas">Time Deltas</h2>
+<p>To demonstrate that our pull network can be run on demand we’ll describe a circle that follows the cursor <em>and</em> changes shape and color over time. Eventually the circle will stop changing shape and color so unless there’s an input event we should see the network <em>go to sleep</em>.</p>
+<p>So far we have a stream for the cursor position but now we’ll need a stream of time deltas. The reason we need deltas is that we’ll use some tweening streams from <a href="http://hackage.haskell.org/package/varying">varying</a> that require deltas as input. This breaks some of the rules of hard FRP - we’re not supposed to deal in deltas, but I think you’ll find that once it’s done we don’t have to use deltas for anything more than a plug.</p>
+<blockquote>
+<p>timeUpdated :: (Applicative m, Monad m) =&gt; VarT m UserInput (Event Float) timeUpdated = var f ~&gt; onJust where f (InputTime t) = Just t f _ = Nothing</p>
+</blockquote>
+<p>We need to fill in the gaps in <code>timeUpdated</code> when it doesn’t produce an event.</p>
+<blockquote>
+<p>deltas :: (Applicative m, Monad m) =&gt; VarT m UserInput Float deltas = 0 <code>orE</code> timeUpdated</p>
+</blockquote>
+<p>The implementation of <code>deltas</code> says “produce <code>0</code> unless <code>timeUpdated</code> produces an event - if so, produce the value of that event.</p>
+<h2 id="requesting-updates">Requesting Updates</h2>
+<p>In order to have smooth animation over time we need to know that the network requires frequent updates. In our main loop we’ll block until user input happens or until the network requests that itself be updated.</p>
+<p>Using the monadic constructor <code>varM</code> we write a stream that can reach out to the Writer monad, make the request and pass whatever input it received through as output. It’s a bit hacky as far as FRP goes (we’re only using its side-effect), but this is what’s required to use our system in a pushy fashion.</p>
+<blockquote>
+<p>requestUpdate :: VarT Effect a a requestUpdate = varM $ -&gt; do tell [OutputNeedsUpdate] return input</p>
+</blockquote>
+<p>You can see that both <code>var</code> and <code>varM</code> use regular functions to create a stream. The input to the stream is the only parameter to the function and the output of the function becomes the output of the stream. Check out the other constructors in the <a href="http://hackage.haskell.org/package/varying/docs/Control-Varying-Core.html#g:1">varying docs</a>.</p>
+<h2 id="time">Time</h2>
+<p>Combining our <code>deltas</code> and <code>requestUpdate</code> streams gives us our main <code>time</code> stream. Whenever a part of our network depends on <code>time</code> the underlying infrastructure should receive a request that the network be updated. If no part of the network depends on time our main loop will sleep and only wake to render on user input.</p>
+<blockquote>
+<p>time :: VarT Effect UserInput Float time = deltas ~&gt; requestUpdate</p>
+</blockquote>
+<p>Since we now have time flowing through our network we can use the tweening capabilities that ship with <a href="http://hackage.haskell.org/package/varying">varying</a> in <strong>Control.Varying.Tween</strong>. Tweens run one step higher in abstraction in order to play with varying values that are only defined over a select domain. These are called splines.</p>
+<h2 id="tweening-with-splines">Tweening With Splines</h2>
+<p>A spline is a temporary changing value that has an end result. Splines are essentially chains of event streams. When an event stream stops producing the current spline terminates and the next event stream takes over. The input, output and result value of a spline are encoded in the spline’s type signature. A ‘Spline a b m c’ describes a spline that takes ‘a’s as input, produces ’b’s as output - runs in the ’m’ monad and results in ‘c’. Our tweening spline will take time (<code>Float</code>) as input, give <code>Float</code> as output and result in the last tweened output value, also <code>Float</code>. We’ll want to be able to change the duration of the spline so we’ll write a function that takes the duration and returns our spline.</p>
+<blockquote>
+<p>easeInOutSpline :: (Applicative m, Monad m) =&gt; Float -&gt; SplineT Float Float m Float easeInOutSpline t = do halfway &lt;- tween easeInExpo 1 0 $ t/2</p>
+</blockquote>
+<p>Above we tween from <code>1</code> to <code>0</code> over <code>t/2</code> seconds using an easing function. The spline produces the interpolated values until <code>t/2</code> seconds, and then results in the last interpolated value, which is either <code>0</code> or very close to <code>0</code>.</p>
+<p>Now we complete the tween.</p>
+<blockquote>
+<pre><code>tween linear halfway 1 $ t/2</code></pre>
+</blockquote>
+<p>As you can see, with splines we can use monadic notation. Since a spline is only defined over a certain domain it can be considered to terminate, giving an end result and allowing you to chain another spline. This chaining or sequencing is what makes splines so useful for defining a signals behavior over events.</p>
+<h2 id="actually-using-splines">Actually Using Splines</h2>
+<p>Our tweening spline represents a number over time but splines are only continuous over a finite domain, which is in this case <code>t</code> seconds. We’d like to use a completely continuous signal (a <code>Var m InputEvent Pic</code>) to tween our <code>Pic</code>. <code>Spline</code> runs at one level of abstraction above <code>VarT</code> and as such, we can create an output stream of the spline, turning it back into a <code>VarT</code>. All we need is to use <code>outputStream</code> along with an initial value. The resulting stream will produce the values of the spline until the it concludes. Once the spline terminates the stream will repeat the last known value forever. If the spline <em>never</em> produces, the initial value will be produced forever.</p>
+<blockquote>
+<p>easeInOutExpo :: (Applicative m, Monad m) =&gt; Float -&gt; VarT m Float Float easeInOutExpo = outputStream 1 . easeInOutSpline</p>
+</blockquote>
+<p>We’d like to demonstrate that the network sleeps when time is no longer a dependency, which means we’ll have to set up a network that depends on time for a while and then moves on. Since this sounds like sequencing event streams we’ll use splines again.</p>
+<blockquote>
+<p>multSequence :: Float -&gt; SplineT UserInput Float Effect Float</p>
+</blockquote>
+<p>Note how the type signature now contains <code>Effect</code> since we’ll need to use time, which requires the ability to access the <code>Writer</code> monad to write out update requests.</p>
+<blockquote>
+<p>multSequence t = do (val,_) &lt;- (time ~&gt; easeInOutExpo t) <code>untilEvent</code> (time ~&gt; after t) return val</p>
+</blockquote>
+<p>Above we plug time into two streams - the first is our tweening stream and the second is an event stream we use as a timer. <code>time ~&gt; after t</code> will produce <code>Event ()</code> forever after <code>t</code> seconds. We combine the two streams using the combinator <code>untilEvent</code>. This combinator produces output values using the first stream until an event occurs in the second stream, then returns the last values of each in a tuple. <code>after</code> will produce <code>Event ()</code>, and <code>untilEvent</code> unwraps the event value for you, tupling it up - making the right value of our spline’s result <code>()</code>, which we can ignore.</p>
+<p>All together, <code>multSequence</code> is a spline that depends on time for <code>t</code> seconds and then returns <code>1</code> forever. This should help us demonstrate that the network no longer depends on time and can render sporatically whenever a user event comes down the pipe.</p>
+<p>Lastly we’ll turn that spline into a continuous stream.</p>
+<blockquote>
+<p>multOverTime :: Float -&gt; VarT Effect UserInput Float multOverTime = outputStream 0 . multSequence</p>
+</blockquote>
+<h2 id="the-big-picture">The Big Picture</h2>
+<p>Now we can combine our network. We start by writing a pure function that takes a position, scale, red, green and blue parameters and returns a <code>Pic</code>. This <code>Pic</code> is what we’ll render each frame.</p>
+<p>Here we use functions from <a href="http://github.com/schell/gelatin/tree/master/gelatin-picture">gelatin-picture</a> to translate, scale and fill a circle of radius 100.</p>
+<blockquote>
+<p>picture :: V2 Float -&gt; Float -&gt; Float -&gt; Float -&gt; Float -&gt; Pic picture cursor s r g b = move cursor $ scale (V2 s s) $ withFill (solid $ V4 r g b 1) $ circle 100</p>
+</blockquote>
+<p>We put it all together with <a href="http://hackage.haskell.org/package/varying">varying</a>s Applicative instance to construct our <code>Pic</code> stream.</p>
+<blockquote>
+<p>network :: VarT Effect UserInput Pic network = picture &lt;$&gt; cursorPosition &lt;<em>&gt; multOverTime 3 &lt;</em>&gt; multOverTime 1 &lt;<em>&gt; multOverTime 2 &lt;</em>&gt; multOverTime 3</p>
+</blockquote>
+<p>What this bit of code says is that our network is a picture that follows the cursor position changing scale over three seconds, changing its red color channel over one second, its green over two seconds and its blue over three seconds. This will all happen in parallel so all time-based animation should conclude after three seconds. At that point the circle will be white (multOverTime ends on <code>1.0</code>), with a radius of <code>100</code> and following the cursor.</p>
+<h1 id="our-game-loop">Our Game Loop</h1>
+<p>In our main loop we need to make a window and write functions for pushing input into our network. We’ll also sample our network and render it.</p>
+<blockquote>
+<p>main :: IO () main = do</p>
+</blockquote>
+<p>Start up glfw, receiving a <code>Rez</code>. A <code>Rez</code> is a type of resource that <a href="http://github.com/schell/gelatin/tree/master/gelatin-glfw">gelatin-glfw</a> uses to render. It’s a composite type containing a glfw window and some shaders.</p>
+<blockquote>
+<pre><code>(rez,window) &lt;- startupGLFWBackend 800 600 &quot;Odin Part One - GLFW&quot; Nothing Nothing 
+setWindowPos window 400 400</code></pre>
+</blockquote>
+<p>Next we’ll need a <code>TVar</code> to contain our app data - that way we can access and modify it from any thread. This is going to be a big part of turning our pull based FRP network into a push-esque system, where we only render what and when we need.</p>
+<blockquote>
+<pre><code>t0   &lt;- getCurrentTime
+tvar &lt;- atomically $ newTVar AppData{ appNetwork = network 
+                                    , appCache   = mempty
+                                    , appEvents  = []
+                                    , appUTC     = t0
+                                    }</code></pre>
+</blockquote>
+<p><a href="http://hackage.haskell.org/package/varying">varying</a> is a pull based FRP implementation. This roughly means that as the programmer you describe a network using various streams, combining them together until you have one final stream that you can “pull” or sample from <strong>each frame</strong>. Your per-frame game data will essentially just fall out of the network every frame. The downside to a pull network is that you have to sample it often, typically every frame - regardless of whether or not anything has changed. This is what we are trying to avoid.</p>
+<p>In an attempt to remedy that situation we’ll only run the network when we receive an event from glfw - or if our network requests that we run it. Let’s define the function we’ll use to “push” a user event into our app.</p>
+<blockquote>
+<pre><code>let push input = atomically $ modifyTVar&#39; tvar $ \app -&gt; 
+                     app{ appEvents = appEvents app ++ [input] }</code></pre>
+</blockquote>
+<p>That’s it! We simply use <code>atomically $ modifyTVar'</code> to update the app’s <code>appEvent</code> slot, adding the new input at the end of the list. Haskell makes threading suuuuper easy.</p>
+<p>Separately we need a function to sample and render. We’ll run this any time glfw receives an event of any kind. Actually we’ll run this any time glfw wakes the main thread but that’s almost the same thing.</p>
+<blockquote>
+<pre><code>    step = do  
+        t &lt;- getCurrentTime
+        putStrLn $ &quot;Stepping &quot; ++ show t</code></pre>
+</blockquote>
+<p>Above we print the current time just so we know the app is stepping in the console. We can use this to verify that we’re only running the step function when an event occurs.</p>
+<h2 id="the-network-step">The Network Step</h2>
+<p>Now we’ll run the network. We keep track of the last time we ran the network and create a new time <code>InputEvent</code> to step our time based streams with, then we add that on to the end of our stored events and sample the network using <code>stepMany</code>.</p>
+<p><code>stepMany</code> takes a list of input to iterate your network over, returning the last sample. Earlier I mentioned that <code>UserInput</code> needs a <code>Monoid</code> instance. The reason for this is that stepMany runs over each item of the list until it gets to the empty list. It then runs one more time using the <code>mempty</code> event. Ultimately, if you fed your network an empty list of events, <code>stepMany</code> would create one and step your network over it. If that sounds funky don’t worry, there are other strategies to use for sampling, but this makes the most sense here.</p>
+<blockquote>
+<pre><code>        AppData net cache events lastUTC &lt;- readTVarIO tvar
+        let dt = max oneFrame $ realToFrac $ diffUTCTime t lastUTC 
+            evs = events ++ [InputTime dt] 
+            ((pic, nextNet), outs) = runWriter $ stepMany evs net </code></pre>
+</blockquote>
+<p>Now we can render our <code>Pic</code>.</p>
+<blockquote>
+<pre><code>        newCache &lt;- renderFrame window rez cache pic</code></pre>
+</blockquote>
+<p>And write our new app state, making sure to clear out our events.</p>
+<blockquote>
+<pre><code>        atomically $ writeTVar tvar $ AppData nextNet newCache [] t</code></pre>
+</blockquote>
+<p>Then apply our network’s requests. We fold our output using a <code>Set</code> since we only want unique requests. We don’t want time going super fast just because more network nodes request it. Time…woah.</p>
+<blockquote>
+<pre><code>        let requests = S.toList $ foldr S.insert S.empty outs
+        mapM_ applyOutput requests </code></pre>
+</blockquote>
+<p>Here’s where the update request magic happens. We spawn a new thread to wait a duration, whatever we see fit. In this case it’s <code>oneFrame</code>, or one thirtieth of a second. Then we <code>push</code> an <code>InputTime</code> event into our app and call glfw’s <code>postEmptyEvent</code>. <code>postEmptyEvent</code> will wake up the main thread from <code>waitEvents</code>, which you’ll see later.</p>
+<blockquote>
+<pre><code>    oneFrame = 1/30 
+    applyOutput OutputNeedsUpdate = void $ async $ do 
+        threadDelay $ round (oneFrame * 1000)
+        postEmptyEvent
+    applyOutput _ = return ()</code></pre>
+</blockquote>
+<p>But what about our user input events? For this we can wire up glfw’s nifty callbacks. They’ll simply push some events in our event queue.</p>
+<blockquote>
+<pre><code>setCursorPosCallback window $ Just $ \_ x y -&gt;
+    push $ InputCursor (realToFrac x) (realToFrac y)</code></pre>
+</blockquote>
+<blockquote>
+<pre><code>setWindowSizeCallback window $ Just $ \_ w h -&gt; do
+    print (&quot;window size&quot;,w,h)
+    push $ InputWindowSize w h</code></pre>
+</blockquote>
+<p>Next is a nifty hack. In this callback we won’t push an event, we’ll just call <code>step</code> to update our app while the window is refreshing. This gives the app the ability to run even when the window is actively being resized.</p>
+<blockquote>
+<pre><code>setWindowRefreshCallback window $ Just $ \_ -&gt; do
+    putStrLn &quot;widow refresh&quot;
+    step</code></pre>
+</blockquote>
+<p>And now we can loop forever! We process all the stored events and render our app. Then we call <code>waitEvents</code> which will put the main thread to sleep until some events have been stored - rinse and repeat.</p>
+<p>Output requests for updates will be scheduled in a separate thread and will post an empty event, waking up the main thread from <code>waitEvents</code> - causing our loop to recurse.</p>
+<blockquote>
+<pre><code>let loop = step &gt;&gt; waitEvents &gt;&gt; loop
+loop</code></pre>
+</blockquote>
+<h2 id="conclusion">Conclusion</h2>
+<p>FRP is a pretty cool thing. It’s got some great ideas and its a nice way to organize your code. It encourages very granular functions and by providing a small feedback mechanism you can remedy some of the bitter taste of constant rendering.</p>
+<p>Hopefully this tutorial has been helpful. Please comment at <a href="https://news.ycombinator.com/item?id=11090457">HN</a> or <a href="https://www.reddit.com/r/haskell/comments/45gsbw/learning_me_a_haskell_frp_game_infrastructure/">Reddit</a>, constructive or not! You can say things like “I hate me an FRP” or “I learn me some streams, hot dang.” Thanks for reading :)</p>
+<p><a href="https://github.com/schell/odin">Oh - also - don’t forget that this is a literate haskell file and can be built and run in standard cabal or stack fasion</a>.</p></body></html>
