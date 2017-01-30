@@ -56,7 +56,7 @@ optsParser = showExample <|>
 
 run :: [String] -> IO ()
 run args = do
-  let version = "milkshake v0.01"
+  let version = "milkshake v0.02"
       opts = info (helper <*> optsParser) (  fullDesc
                                           <> progDesc "A static site compiler"
                                           <> header version
