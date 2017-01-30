@@ -5,28 +5,29 @@ module Milkshake.Compile
   , compile
   ) where
 
-import           Control.Applicative          ((<|>))
-import           Control.Monad                (forM_, unless, when)
-import           Data.Aeson                   hiding (Success)
-import qualified Data.ByteString.Lazy.Char8   as C8
-import qualified Data.HashMap.Strict          as HM
-import           Data.List                    (intercalate)
-import qualified Data.Map.Lazy                as M
-import qualified Data.Set                     as S
-import           Data.String                  (fromString)
-import           Data.Text                    (Text)
-import qualified Data.Text                    as T
+import           Control.Applicative           ((<|>))
+import           Control.Monad                 (forM_, unless, when)
+import           Data.Aeson                    hiding (Success)
+import qualified Data.ByteString.Lazy.Char8    as C8
+import qualified Data.HashMap.Strict           as HM
+import           Data.List                     (intercalate)
+import qualified Data.Map.Lazy                 as M
+import qualified Data.Set                      as S
+import           Data.String                   (fromString)
+import           Data.Text                     (Text)
+import qualified Data.Text                     as T
 import           Milkshake.Types
 import           Network.HTTP.Client
 import           Network.HTTP.Client.TLS
 import           Options.Applicative
-import           System.Directory             (copyFile,
-                                               createDirectoryIfMissing,
-                                               doesDirectoryExist,
-                                               doesFileExist, listDirectory,
-                                               removeDirectoryRecursive)
-import           System.Exit                  (exitFailure)
-import           System.FilePath              ((</>))
+import           System.Directory              (copyFile,
+                                                createDirectoryIfMissing,
+                                                doesDirectoryExist,
+                                                doesFileExist, listDirectory,
+                                                removeDirectoryRecursive)
+import           System.Exit                   (exitFailure)
+import           System.FilePath               (takeExtension, (</>))
+import           Text.Highlighting.Kate.Styles (zenburn)
 import           Text.Pandoc
 import           Text.Pandoc.Readers.Markdown
 import           Text.Pandoc.Shared
@@ -75,18 +76,27 @@ run args = do
 --------------------------------------------------------------------------------
 -- Pandoc
 --------------------------------------------------------------------------------
-myPandocExtensions :: S.Set Extension
-myPandocExtensions =
-  S.fromList [ Ext_link_attributes
-             , Ext_mmd_link_attributes
-             , Ext_literate_haskell
-             ]
+extExtensions :: String -> S.Set Extension
+extExtensions ".md" = S.filter (/= Ext_literate_haskell) allMyPandocExtensions
+extExtensions _     = allMyPandocExtensions
+
+allMyPandocExtensions :: S.Set Extension
+allMyPandocExtensions = S.fromList [ Ext_link_attributes
+                                   , Ext_mmd_link_attributes
+                                   , Ext_literate_haskell
+                                   ]
 
 stringifyHTML :: MetaValue -> Value
-stringifyHTML = String . T.pack . escapeStringForXML . stringify
+stringifyHTML = String . T.pack {-. escapeStringForXML-} . stringify
 
 inlines :: String -> MetaValue
 inlines = MetaInlines . intercalate [Space] . map ((:[]) . Str) . words
+
+metaLookup :: String -> Meta -> Maybe String
+metaLookup = ((stringify <$>) .) . lookupMeta
+
+metaInsert :: String -> MetaValue -> Meta -> Meta
+metaInsert key val = Meta . M.insert key val . unMeta
 --------------------------------------------------------------------------------
 -- Rendering
 --------------------------------------------------------------------------------
@@ -94,17 +104,16 @@ newtype RenderablePage = RenderablePage Pandoc
 
 instance ToJSON RenderablePage where
   toJSON (RenderablePage pandoc@(Pandoc meta _)) =
-    let optsPlain  = def{ writerExtensions = S.union myPandocExtensions $
-                                               writerExtensions def
-                        , writerHighlight = True
-                        , writerHtml5 = True
-                        }
-        opts = optsPlain{ writerStandalone = False
-                        , writerTableOfContents = True
-                        }
+    let opts  = def{ writerExtensions = allMyPandocExtensions <> pandocExtensions
+                   , writerHighlight = True
+                   , writerHtml5 = True
+                  -- , writerHighlightStyle = zenburn
+                   , writerStandalone = False
+                   }
         body = String $ T.pack $ writeHtmlString opts pandoc
         toc = String $ T.pack $ writeHtmlString opts{writerTemplate = "$toc$"
                                                     ,writerStandalone = True
+                                                    ,writerTableOfContents = True
                                                     } pandoc
         vars = HM.fromList [ ("body", body)
                            , ("toc", toc)
@@ -119,13 +128,11 @@ backupTemplate :: Text
 backupTemplate =
   "<html><head><title>$title$</title></head><body>$body$</body></html>"
 
-renderTemplateTextWith :: Text -> Value -> String
+renderTemplateTextWith :: ToJSON a => Text -> a -> Either String String
 renderTemplateTextWith template val =
-  either (const $ T.unpack backupTemplate)
-         (`renderTemplate` val)
-         $ compileTemplate template
+  (`renderTemplate` val) <$> compileTemplate template
 
-renderPage :: RenderablePage -> Text -> String
+renderPage :: RenderablePage -> Text -> Either String String
 renderPage page template =
   renderTemplateTextWith template $ toJSON page
 --------------------------------------------------------------------------------
@@ -136,13 +143,17 @@ compilePage prefix page = case pageSourcePath page of
   LocalPath pth  -> do
     putStrLn $ "Reading local file " ++ pth
     file <- C8.readFile pth
-    compilePage prefix page{pageSourcePath=InMemory $ C8.unpack file}
+    compilePage prefix page{pageSourcePath=InMemory $ C8.unpack file
+                           ,pageMeta=M.insert "source" pth $ pageMeta page
+                           }
   RemotePath pth -> do
     putStrLn $ "Reading remote file " ++ pth
     mngr <- newManager tlsManagerSettings
     let req = fromString pth
     body <- (C8.unpack . responseBody) <$> httpLbs req mngr
-    compilePage prefix page{pageSourcePath=InMemory body}
+    compilePage prefix page{pageSourcePath=InMemory body
+                           ,pageMeta=M.insert "source" pth $ pageMeta page
+                           }
   InMemory file -> case pageOp page of
     PageOpCopy   -> do
       let dest = prefix </> pageName page
@@ -153,10 +164,11 @@ compilePage prefix page = case pageSourcePath page of
       let dest = prefix </> pageName page
       putStrLn $ "  Pandoc'ing to file " ++ dest
       let reader = readMarkdownWithWarnings myOpts
-          myOpts = def{ readerExtensions = S.union myPandocExtensions $
-                                            readerExtensions def
+          ext    = maybe ".md" takeExtension $ M.lookup "source" $ pageMeta page
+          myOpts = def{ readerExtensions = extExtensions ext <> pandocExtensions
                       , readerSmart = True
                       }
+      putStrLn $ "  Using extensions for " ++ show ext
       (Pandoc (Meta meta) blocks, ws) <- case reader file of
         Left er -> putStrLn "Milkshake error: " >> print er >> exitFailure
         Right p -> return p
@@ -166,8 +178,8 @@ compilePage prefix page = case pageSourcePath page of
       -- mix the page meta in with meta
       let pmeta   = inlines <$> pageMeta page
           allMeta = Meta $ meta <> pmeta
-      print allMeta
-      template <- case stringify <$> lookupMeta "theme" allMeta of
+
+      template <- case metaLookup "theme" allMeta of
         Nothing    -> return backupTemplate
         Just theme -> doesFileExist theme >>= \case
           False -> do
@@ -183,9 +195,13 @@ compilePage prefix page = case pageSourcePath page of
             T.pack <$> readFile theme
 
       let rpage = RenderablePage $ Pandoc allMeta blocks
-          html  = renderPage rpage template
-      writeFile dest html
-      putStrLn "  Done."
+      case renderPage rpage template of
+        Left er -> do
+          putStrLn $ "  Failed: " ++ show er
+          exitFailure
+        Right html -> do
+          writeFile dest html
+          putStrLn "  Done."
 
 compile :: FilePath -> Dir -> IO ()
 compile prefix (DirCopiedFrom dir) = do
@@ -209,5 +225,6 @@ compile prefix site = do
   let dir       = dirName site
       prefixDir = prefix </> dir
   createDirectoryIfMissing True prefixDir
+  putStrLn $ "Creating directory " ++ show prefixDir
   mapM_ (compilePage prefixDir) $ dirFiles site
   mapM_ (compile prefixDir)     $ dirSubdirs site

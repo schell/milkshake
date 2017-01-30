@@ -64,6 +64,7 @@ library
                  , amazonka-s3
                  , amazonka-cloudfront
                  , time
+                 , highlighting-kate
                  , lucid
                  , filepath
                  , directory

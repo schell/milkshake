@@ -1,32 +1,32 @@
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE DeriveGeneric     #-}
+{-# LANGUAGE FlexibleContexts  #-}
+{-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE RecordWildCards   #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 module Milkshake where
 
-import Development.Shake
-import Development.Shake.FilePath
-import qualified Data.Text as T
-import Data.Aeson
-import qualified Data.Aeson.Encode.Pretty as PrettyJSON
-import qualified Data.Yaml.Pretty as PrettyYAML
-import Data.Text (Text)
-import Data.Monoid ((<>))
-import qualified Data.ByteString.Lazy.Char8 as L8
-import qualified Data.ByteString.Char8 as B8
-import qualified Data.HashMap.Strict as HM
-import qualified Data.Map.Lazy as M
-import           Data.Map.Lazy (Map) 
-import qualified Data.Set as S
-import Control.Monad
-import Text.Pandoc
-import Text.Pandoc.Shared
-import Text.Pandoc.XML
-import Text.Pandoc.Readers.Markdown
-import System.Exit
-import GHC.Generics hiding (Meta)
+import           Control.Monad
+import           Data.Aeson
+import qualified Data.Aeson.Encode.Pretty     as PrettyJSON
+import qualified Data.ByteString.Char8        as B8
+import qualified Data.ByteString.Lazy.Char8   as L8
+import qualified Data.HashMap.Strict          as HM
+import           Data.Map.Lazy                (Map)
+import qualified Data.Map.Lazy                as M
+import           Data.Monoid                  ((<>))
+import qualified Data.Set                     as S
+import           Data.Text                    (Text)
+import qualified Data.Text                    as T
+import qualified Data.Yaml.Pretty             as PrettyYAML
+import           Development.Shake
+import           Development.Shake.FilePath
+import           GHC.Generics                 hiding (Meta)
+import           System.Exit
+import           Text.Pandoc
+import           Text.Pandoc.Readers.Markdown
+import           Text.Pandoc.Shared
+import           Text.Pandoc.XML
 --------------------------------------------------------------------------------
 -- Milkshake
 --------------------------------------------------------------------------------
@@ -95,12 +95,12 @@ instance ToJSON Page where
                        , "pageTemplate"  .= pageTemplate page
                        , "pagePandoc"    .= pagePandoc page
                        , "pageRendering" .= PageRendering page
-                       ] 
+                       ]
 
 renderTemplateTextWith :: ToJSON a => Text -> a -> String
 renderTemplateTextWith template a =
   either (const $ T.unpack backupTemplate)
-         (`renderTemplate` (toJSON a))
+         (`renderTemplate` toJSON a)
          $ compileTemplate template
 
 renderPage :: Page -> String
@@ -135,7 +135,7 @@ makeGetTemplate :: Rules GetTemplate
 makeGetTemplate = newCache $ \file -> doesFileExist file >>= \case
   False -> liftIO $ do
     putStrLn $ "Milkshake error: could not find theme " ++ show file
-    exitFailure 
+    exitFailure
   True -> T.pack <$> readFile' file
 
 makeGetPage :: GetTemplate -> Rules GetPage
@@ -171,7 +171,7 @@ makeGetSitemap MilkshakeConfig{..} getMarkdown = newCache $ \_ -> do
       return css
     _ -> return []
 
-  imgs <- doesDirectoryExist mscImagesDirectory >>= \case 
+  imgs <- doesDirectoryExist mscImagesDirectory >>= \case
     True -> do
       imgs <- getDirectoryFiles "" [mscImagesDirectory </> "*.*"]
       return imgs
@@ -182,12 +182,12 @@ makeGetSitemap MilkshakeConfig{..} getMarkdown = newCache $ \_ -> do
       markdownPages <- getDirectoryFiles "" [mscContentDirectory ++ "//*.md"]
       return markdownPages
     _ -> return []
-  
+
   let pages = map ((-<.> "html") . dropDirectory1) mds
-  
-  datas <- mapM getMarkdown mds                     
-  return $ Sitemap (css ++ imgs) $ M.fromList $ zip pages datas  
-  
+
+  datas <- mapM getMarkdown mds
+  return $ Sitemap (css ++ imgs) $ M.fromList $ zip pages datas
+
 --------------------------------------------------------------------------------
 -- Helper Actions
 --------------------------------------------------------------------------------
@@ -224,7 +224,7 @@ milkshake cfg@MilkshakeConfig{..} =
     phony "build" $ do
       Sitemap{..} <- getSitemap ()
       let files = sitemapStaticFiles ++ M.keys sitemapGeneratedFiles
-      need $ map (mscBuildDirectory </>) files 
+      need $ map (mscBuildDirectory </>) files
     ---------------------------------------------------------------------------
     -- Helpers
     ---------------------------------------------------------------------------
@@ -241,7 +241,7 @@ milkshake cfg@MilkshakeConfig{..} =
     ----------------------------------------------------------------------------
     -- CSS
     ----------------------------------------------------------------------------
-    mscBuildDirectory </> mscCSSDirectory </> "*.css" %> \out -> 
+    mscBuildDirectory </> mscCSSDirectory </> "*.css" %> \out ->
       copyFile' (dropDirectory1 out) out
     ----------------------------------------------------------------------------
     -- images

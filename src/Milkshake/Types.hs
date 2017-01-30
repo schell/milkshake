@@ -64,7 +64,12 @@ data Page = Page { pageName       :: String
 instance ToJSON Page where
   toEncoding = genericToEncoding defaultOptions
 
-instance FromJSON Page
+instance FromJSON Page where
+  parseJSON (Object v) = Page <$> v .: "pageName"
+                              <*> v .: "pageSourcePath"
+                              <*> (v .: "pageMeta" <|> return mempty)
+                              <*> (v .: "pageOp" <|> return PageOpPandoc)
+  parseJSON e = fail $ "Could not decode " ++ show e
 --------------------------------------------------------------------------------
 -- Dir
 --------------------------------------------------------------------------------
@@ -87,8 +92,8 @@ instance FromJSON Dir where
   parseJSON (Object v) = copied <|> explicit
     where copied   = DirCopiedFrom <$> v .: "dirCopiedFrom"
           explicit = Dir <$> v .: "dirName"
-                         <*> v .: "dirFiles"
-                         <*> v .: "dirSubdirs"
+                         <*> (v .: "dirFiles" <|> return mempty)
+                         <*> (v .: "dirSubdirs" <|> return mempty)
   parseJSON e = fail $ "Could not decode " ++ show e
 --------------------------------------------------------------------------------
 -- An Example Site
