@@ -5,33 +5,35 @@ module Milkshake.Compile
   , compile
   ) where
 
-import           Control.Applicative           ((<|>))
-import           Control.Monad                 (forM_, unless, when)
-import           Data.Aeson                    hiding (Success)
-import qualified Data.ByteString.Lazy.Char8    as C8
-import qualified Data.HashMap.Strict           as HM
-import           Data.List                     (intercalate)
-import qualified Data.Map.Lazy                 as M
-import qualified Data.Set                      as S
-import           Data.String                   (fromString)
-import           Data.Text                     (Text)
-import qualified Data.Text                     as T
+import           Control.Applicative          ((<|>))
+import           Control.Monad                (forM_, msum, unless, when)
+import           Data.Aeson                   hiding (Success)
+import qualified Data.ByteString              as B
+import qualified Data.ByteString.Lazy.Char8   as C8
+import           Data.Char                    (toLower)
+import qualified Data.HashMap.Strict          as HM
+import           Data.List                    (intercalate)
+import qualified Data.Map.Lazy                as M
+import qualified Data.Set                     as S
+import           Data.String                  (fromString)
+import           Data.Text                    (Text)
+import qualified Data.Text                    as T
+import qualified Data.Text.Lazy               as LT
 import           Milkshake.Types
 import           Network.HTTP.Client
 import           Network.HTTP.Client.TLS
 import           Options.Applicative
-import           System.Directory              (copyFile,
-                                                createDirectoryIfMissing,
-                                                doesDirectoryExist,
-                                                doesFileExist, listDirectory,
-                                                removeDirectoryRecursive)
-import           System.Exit                   (exitFailure)
-import           System.FilePath               (takeExtension, (</>))
-import           Text.Highlighting.Kate.Styles (zenburn)
+import           System.Directory             (createDirectoryIfMissing,
+                                               doesDirectoryExist,
+                                               doesFileExist, listDirectory,
+                                               removeDirectoryRecursive)
+import           System.Exit                  (exitFailure)
+import           System.FilePath              (takeBaseName, takeExtension,
+                                               takeFileName, (-<.>), (</>))
 import           Text.Pandoc
 import           Text.Pandoc.Readers.Markdown
 import           Text.Pandoc.Shared
-import           Text.Pandoc.XML
+import           Text.Pretty.Simple           (pPrint, pShow)
 
 data Configuration = Configuration { configSitemap     :: FilePath
                                    , configShouldClean :: Bool
@@ -94,9 +96,6 @@ inlines = MetaInlines . intercalate [Space] . map ((:[]) . Str) . words
 
 metaLookup :: String -> Meta -> Maybe String
 metaLookup = ((stringify <$>) .) . lookupMeta
-
-metaInsert :: String -> MetaValue -> Meta -> Meta
-metaInsert key val = Meta . M.insert key val . unMeta
 --------------------------------------------------------------------------------
 -- Rendering
 --------------------------------------------------------------------------------
@@ -142,15 +141,15 @@ compilePage :: FilePath -> Page -> IO ()
 compilePage prefix page = case pageSourcePath page of
   LocalPath pth  -> do
     putStrLn $ "Reading local file " ++ pth
-    file <- C8.readFile pth
-    compilePage prefix page{pageSourcePath=InMemory $ C8.unpack file
+    file <- B.readFile pth
+    compilePage prefix page{pageSourcePath=InMemory file
                            ,pageMeta=M.insert "source" pth $ pageMeta page
                            }
   RemotePath pth -> do
     putStrLn $ "Reading remote file " ++ pth
     mngr <- newManager tlsManagerSettings
     let req = fromString pth
-    body <- (C8.unpack . responseBody) <$> httpLbs req mngr
+    body <- (C8.toStrict . responseBody) <$> httpLbs req mngr
     compilePage prefix page{pageSourcePath=InMemory body
                            ,pageMeta=M.insert "source" pth $ pageMeta page
                            }
@@ -158,7 +157,7 @@ compilePage prefix page = case pageSourcePath page of
     PageOpCopy   -> do
       let dest = prefix </> pageName page
       putStrLn $ "  Copying to file " ++ dest
-      writeFile dest file
+      B.writeFile dest file
       putStrLn "  Done."
     PageOpPandoc -> do
       let dest = prefix </> pageName page
@@ -169,9 +168,10 @@ compilePage prefix page = case pageSourcePath page of
                       , readerSmart = True
                       }
       putStrLn $ "  Using extensions for " ++ show ext
-      (Pandoc (Meta meta) blocks, ws) <- case reader file of
-        Left er -> putStrLn "Milkshake error: " >> print er >> exitFailure
-        Right p -> return p
+      (Pandoc (Meta meta) blocks, ws) <-
+        case reader $ C8.unpack $ C8.fromStrict file of
+          Left er -> putStrLn "Milkshake error: " >> print er >> exitFailure
+          Right p -> return p
 
       unless (null ws) $ putStrLn $ unlines $ "WARNINGS: ":ws
 
@@ -197,29 +197,59 @@ compilePage prefix page = case pageSourcePath page of
       let rpage = RenderablePage $ Pandoc allMeta blocks
       case renderPage rpage template of
         Left er -> do
-          putStrLn $ "  Failed: " ++ show er
+          putStrLn $ "  Failed: " ++ (LT.unpack $ pShow er)
           exitFailure
         Right html -> do
           writeFile dest html
           putStrLn "  Done."
 
-compile :: FilePath -> Dir -> IO ()
-compile prefix (DirCopiedFrom dir) = do
+compile
+  :: FilePath
+  -- ^ The directory in which the operation is happening
+  -> Dir
+  -- ^ The immediate/relative next directory
+  -> IO ()
+compile prefix page@(DirCopiedFrom dir excludes opmap) = do
+  putStrLn $ concat ["Compiling with prefix ", show prefix]
+  pPrint page
   isDir <- doesDirectoryExist dir
   if isDir
     then do
       files <- listDirectory dir
-      forM_ files $ \file -> do
+      forM_ files $ \file -> when (not $ takeFileName file `elem` excludes) $ do
         let from      = dir </> file
             prefixDir = prefix </> dir
             dest      = prefixDir </> file
-        putStrLn $ unwords [ "Copying"
-                           , from
-                           , "to"
-                           , dest
-                           ]
-        createDirectoryIfMissing True prefixDir
-        copyFile from dest
+        doesDirectoryExist from >>= \case
+          True -> do
+            createDirectoryIfMissing True dest
+            compile prefixDir (DirCopiedFrom from excludes opmap)
+          False -> do
+            createDirectoryIfMissing True prefixDir
+            let mpage = msum $ flip map opmap $ \(Operation opFromExt opToExt op) -> do
+                  let getExt = map toLower . filter (/= '.')
+                      oldExt = getExt opFromExt
+                      newExt = getExt opToExt
+                  if oldExt == getExt (takeExtension dest)
+                  then return Page{ pageName = takeBaseName dest -<.> newExt
+                                  , pageSourcePath = LocalPath from
+                                  , pageMeta       = mempty
+                                  , pageOp         = op
+                                  }
+                  else fail ""
+            case mpage of
+              Nothing -> do
+                putStrLn $ "No bulk operation in dir copied from " ++ from ++ " to " ++ dest
+                putStrLn "Simply copying the file."
+                compilePage prefixDir
+                  Page{ pageName       = takeBaseName dest -<.> takeExtension from
+                      , pageSourcePath = LocalPath from
+                      , pageMeta       = mempty
+                      , pageOp         = PageOpCopy
+                      }
+              Just pageToCompile -> do
+                compilePage prefixDir pageToCompile
+
     else putStrLn (show dir ++ "is not a directory") >> exitFailure
 compile prefix site = do
   let dir       = dirName site

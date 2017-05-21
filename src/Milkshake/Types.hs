@@ -5,12 +5,14 @@ module Milkshake.Types
   , PageOp(..)
   , Page(..)
   , Dir(..)
+  , BulkOperation(..)
   , printExampleSite
   , decodeDirFromFile
   ) where
 
 import           Control.Applicative        ((<|>))
 import           Data.Aeson
+import qualified Data.ByteString            as B
 import qualified Data.ByteString.Lazy.Char8 as C8
 import           Data.Map                   (Map)
 import qualified Data.Text                  as T
@@ -22,20 +24,19 @@ import           GHC.Generics
 --------------------------------------------------------------------------------
 data SourcePath = LocalPath FilePath
                 | RemotePath String
-                | InMemory String
+                | InMemory B.ByteString
                 deriving (Show, Eq, Generic)
 
 instance ToJSON SourcePath where
   toJSON (LocalPath path)  = object ["localPath" .= path]
   toJSON (RemotePath path) = object ["remotePath" .= path]
-  toJSON (InMemory file)   = object ["inMemory" .= file]
-  toEncoding = genericToEncoding defaultOptions
+  toJSON (InMemory file)   = object ["inMemory" .= B.unpack file]
 
 instance FromJSON SourcePath where
   parseJSON (Object v) = local <|> remote <|> mem
     where local  = LocalPath <$> v .: "localPath"
           remote = RemotePath <$> v .: "remotePath"
-          mem    = InMemory <$> v .: "inMemory"
+          mem    = InMemory . B.pack <$> v .: "inMemory"
   parseJSON e = fail ("Could not parse " ++ show e)
 --------------------------------------------------------------------------------
 -- PageOp
@@ -54,7 +55,6 @@ instance FromJSON PageOp where
 --------------------------------------------------------------------------------
 -- Page
 --------------------------------------------------------------------------------
--- | TODO: Do this by hand so we don't have to have pageMeta defined in each page
 data Page = Page { pageName       :: String
                  , pageSourcePath :: SourcePath
                  , pageMeta       :: Map String String
@@ -73,15 +73,35 @@ instance FromJSON Page where
 --------------------------------------------------------------------------------
 -- Dir
 --------------------------------------------------------------------------------
+data BulkOperation = Operation { operationExtFrom :: String
+                               , operationExtTo   :: String
+                               , operationPageOp  :: PageOp
+                               } deriving (Show, Eq, Generic)
+
+instance ToJSON BulkOperation where
+  toEncoding = genericToEncoding defaultOptions
+
+instance FromJSON BulkOperation where
+  parseJSON (Object v) = Operation <$> v .: "operationExtFrom"
+                                   <*> v .: "operationExtTo"
+                                   <*> v .: "operationPageOp"
+  parseJSON e = fail $ "Could not decode " ++ show e
+
 data Dir = Dir { dirName    :: String
                , dirFiles   :: [Page]
                , dirSubdirs :: [Dir]
                }
-         | DirCopiedFrom FilePath
+         | DirCopiedFrom { dirName     :: FilePath
+                         , dirExcludes :: [String]
+                         , dirOpMap    :: [BulkOperation]
+                         }
          deriving (Show, Eq, Generic)
 
 instance ToJSON Dir where
-  toJSON (DirCopiedFrom dir) = object ["dirCopiedFrom" .= dir]
+  toJSON (DirCopiedFrom dir ex opmap) = object [ "dirCopiedFrom" .= dir
+                                               , "dirExcludes"   .= ex
+                                               , "dirOpMap"      .= opmap
+                                               ]
   toJSON (Dir name files subdirs) =
     object [ "dirName" .= name
            , "dirFiles" .= files
@@ -91,6 +111,8 @@ instance ToJSON Dir where
 instance FromJSON Dir where
   parseJSON (Object v) = copied <|> explicit
     where copied   = DirCopiedFrom <$> v .: "dirCopiedFrom"
+                                   <*> (v .: "dirExcludes" <|> return mempty)
+                                   <*> (v .: "dirOpMap" <|> return mempty)
           explicit = Dir <$> v .: "dirName"
                          <*> (v .: "dirFiles" <|> return mempty)
                          <*> (v .: "dirSubdirs" <|> return mempty)
@@ -99,13 +121,19 @@ instance FromJSON Dir where
 -- An Example Site
 --------------------------------------------------------------------------------
 exampleSite :: Dir
-exampleSite = Dir "root" [index] [img,css,article]
+exampleSite = Dir "root" [index] [img,css,singleArticle,articles]
   where index = Page "index.html" (LocalPath "content/index.md") mempty PageOpPandoc
-        img   = DirCopiedFrom "img"
-        css   = DirCopiedFrom "css"
+        img   = DirCopiedFrom "img" [".DS_Store"] []
+        css   = DirCopiedFrom "css" [".DS_Store"] []
+        articles = DirCopiedFrom "articles" [".DS_Store"]
+          [Operation { operationExtFrom = "md"
+                     , operationExtTo = "html"
+                     , operationPageOp = PageOpPandoc
+                     }
+          ]
 
-article :: Dir
-article = Dir "article" [Page "index.html" path mempty PageOpPandoc] []
+singleArticle :: Dir
+singleArticle = Dir "single-article" [Page "index.html" path mempty PageOpPandoc] []
   where path = RemotePath "https://raw.githubusercontent.com/schell/odin/8c7296fbd95bd92a40aedb06938c76174fe3e699/src/Part-One.lhs"
 
 printExampleSite :: IO ()

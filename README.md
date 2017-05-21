@@ -1,2 +1,2 @@
 # milkshake
-Website CMS built on Shake, github and Travis-CI.
+Static website CMS built on github and Travis-CI.
