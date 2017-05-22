@@ -12,7 +12,8 @@ import qualified Data.ByteString              as B
 import qualified Data.ByteString.Lazy.Char8   as C8
 import           Data.Char                    (toLower)
 import qualified Data.HashMap.Strict          as HM
-import           Data.List                    (intercalate)
+import           Data.List                    (intercalate, intersect,
+                                               isSuffixOf)
 import qualified Data.Map.Lazy                as M
 import qualified Data.Set                     as S
 import           Data.String                  (fromString)
@@ -28,7 +29,10 @@ import           System.Directory             (createDirectoryIfMissing,
                                                doesFileExist, listDirectory,
                                                removeDirectoryRecursive)
 import           System.Exit                  (exitFailure)
-import           System.FilePath              (takeBaseName, takeExtension,
+import           System.FilePath              (dropExtensions, joinPath,
+                                               replaceExtensions,
+                                               splitDirectories, takeBaseName,
+                                               takeExtension, takeExtensions,
                                                takeFileName, (-<.>), (</>))
 import           Text.Pandoc
 import           Text.Pandoc.Readers.Markdown
@@ -203,15 +207,32 @@ compilePage prefix page = case pageSourcePath page of
           writeFile dest html
           putStrLn "  Done."
 
+-- Check to see if the pathA's last comp is also pathB's first comp, if so
+-- return the portion that is different, in order.
+separateFrom :: Eq a => [a] -> [a] -> [a]
+separateFrom pathA pathB =
+  if nter `isSuffixOf` pathA
+  then take (length pathA - length nter) pathA
+  else pathA
+  where nter = pathA `intersect` pathB
+
 compile
   :: FilePath
   -- ^ The directory in which the operation is happening
   -> Dir
   -- ^ The immediate/relative next directory
   -> IO ()
-compile prefix page@(DirCopiedFrom dir excludes opmap) = do
-  putStrLn $ concat ["Compiling with prefix ", show prefix]
-  pPrint page
+compile prePrefix page@(DirCopiedFrom dir excludes opmap) = do
+  -- If prefix /= prePrefix it's most likely that the user has already copied
+  -- from a local dir and is now adding some custom stuff to it, and we don't
+  -- want to create another nested dir.
+  let prefix = joinPath $
+        separateFrom (splitDirectories prePrefix) (splitDirectories dir)
+  putStrLn $ LT.unpack $ LT.unlines [ "compile"
+                                    , "  " <> pShow prePrefix
+                                    , "  " <> pShow prefix
+                                    , "  " <> pShow page
+                                    ]
   isDir <- doesDirectoryExist dir
   if isDir
     then do
@@ -227,10 +248,10 @@ compile prefix page@(DirCopiedFrom dir excludes opmap) = do
           False -> do
             createDirectoryIfMissing True prefixDir
             let mpage = msum $ flip map opmap $ \(Operation opFromExt opToExt op) -> do
-                  let getExt = map toLower . filter (/= '.')
+                  let getExt = takeExtensions . (replaceExtensions "blah.txt") . map toLower
                       oldExt = getExt opFromExt
                       newExt = getExt opToExt
-                  if oldExt == getExt (takeExtension dest)
+                  if oldExt == getExt (takeExtensions dest)
                   then return Page{ pageName = takeBaseName dest -<.> newExt
                                   , pageSourcePath = LocalPath from
                                   , pageMeta       = mempty
@@ -239,10 +260,10 @@ compile prefix page@(DirCopiedFrom dir excludes opmap) = do
                   else fail ""
             case mpage of
               Nothing -> do
-                putStrLn $ "No bulk operation in dir copied from " ++ from ++ " to " ++ dest
-                putStrLn "Simply copying the file."
+                putStrLn $ "  no bulk operation in dir copied from " ++ from ++ " to " ++ dest
+                putStrLn "  simply copying the file."
                 compilePage prefixDir
-                  Page{ pageName       = takeBaseName dest -<.> takeExtension from
+                  Page{ pageName       = (dropExtensions $ takeFileName dest) -<.> takeExtensions from
                       , pageSourcePath = LocalPath from
                       , pageMeta       = mempty
                       , pageOp         = PageOpCopy
@@ -250,11 +271,11 @@ compile prefix page@(DirCopiedFrom dir excludes opmap) = do
               Just pageToCompile -> do
                 compilePage prefixDir pageToCompile
 
-    else putStrLn (show dir ++ "is not a directory") >> exitFailure
+    else putStrLn ("  " ++ show dir ++ "is not a directory") >> exitFailure
 compile prefix site = do
+  putStrLn $ LT.unpack $ LT.unlines ["compile", "  " <> pShow prefix, "  " <> pShow site]
   let dir       = dirName site
       prefixDir = prefix </> dir
   createDirectoryIfMissing True prefixDir
-  putStrLn $ "Creating directory " ++ show prefixDir
   mapM_ (compilePage prefixDir) $ dirFiles site
   mapM_ (compile prefixDir)     $ dirSubdirs site
