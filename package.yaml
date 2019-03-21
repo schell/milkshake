@@ -1,0 +1,50 @@
+name:                milkshake
+version:             0.2.0.0
+synopsis:            "The milkshake website generator"
+#description:
+homepage:            "http://github.com/schell/milkshake"
+license-file:        LICENSE
+author:              "Schell Scivally"
+maintainer:          "efsubenovex@gmail.com"
+copyright:           "2018 Schell Scivally"
+category:            Web
+build-type:          Simple
+
+dependencies:
+- base >=4.8 && <5.0
+- aeson
+- aeson-pretty
+- bytestring
+- containers
+- directory
+- filepath
+- highlighting-kate
+- HTTP
+- http-client
+- http-client-tls
+- network-uri
+- optparse-applicative
+- pandoc
+- pandoc-types
+- pretty-simple
+- text
+- transformers
+- unordered-containers
+- xml
+- yaml
+
+library:
+  source-dirs: src
+  ghc-options:
+  - -Wall
+  - -threaded
+
+executables:
+  milkshake-cli:
+    source-dirs: app
+    main: Main.hs
+    ghc-options:
+    - -Wall
+    - -threaded
+    dependencies:
+    - milkshake

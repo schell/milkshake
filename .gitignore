@@ -7,3 +7,4 @@ dist/
 *.sw[a-z]
 .stack-work
 build/
+TAGS

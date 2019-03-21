@@ -1,6 +1,5 @@
-flags: {}
+resolver: lts-13.09
 packages:
 - .
-resolver: lts-7.14
 extra-deps:
 - pretty-simple-2.0.0.0

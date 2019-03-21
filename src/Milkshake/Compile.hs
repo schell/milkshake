@@ -1,12 +1,14 @@
-{-# LANGUAGE LambdaCase        #-}
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE LambdaCase            #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE OverloadedStrings     #-}
+{-# LANGUAGE ScopedTypeVariables   #-}
 module Milkshake.Compile
   ( run
   , compile
   ) where
 
 import           Control.Applicative          ((<|>))
-import           Control.Monad                (forM_, msum, unless, when)
+import           Control.Monad                (forM_, msum, when)
 import           Data.Aeson                   hiding (Success)
 import qualified Data.ByteString              as B
 import qualified Data.ByteString.Lazy.Char8   as C8
@@ -15,15 +17,20 @@ import qualified Data.HashMap.Strict          as HM
 import           Data.List                    (intercalate, intersect,
                                                isSuffixOf)
 import qualified Data.Map.Lazy                as M
-import qualified Data.Set                     as S
 import           Data.String                  (fromString)
 import           Data.Text                    (Text)
 import qualified Data.Text                    as T
+import qualified Data.Text.Encoding           as T
 import qualified Data.Text.Lazy               as LT
-import           Milkshake.Types
-import           Network.HTTP.Client
-import           Network.HTTP.Client.TLS
-import           Options.Applicative
+import           Network.HTTP.Client          (httpLbs, newManager,
+                                               responseBody)
+import           Network.HTTP.Client.TLS      (tlsManagerSettings)
+import           Options.Applicative          (Parser, ParserResult (..),
+                                               defaultPrefs, execCompletion,
+                                               execParserPure, fullDesc, header,
+                                               help, helper, info, long,
+                                               metavar, progDesc, renderFailure,
+                                               short, strArgument, switch)
 import           System.Directory             (createDirectoryIfMissing,
                                                doesDirectoryExist,
                                                doesFileExist, listDirectory,
@@ -34,10 +41,21 @@ import           System.FilePath              (dropExtensions, joinPath,
                                                splitDirectories, takeBaseName,
                                                takeExtension, takeExtensions,
                                                takeFileName, (-<.>), (</>))
-import           Text.Pandoc
-import           Text.Pandoc.Readers.Markdown
-import           Text.Pandoc.Shared
-import           Text.Pretty.Simple           (pPrint, pShow)
+import           Text.Pandoc                  (Extension (..), Inline (..),
+                                               Meta (..), MetaValue (..),
+                                               Pandoc (..), PandocError,
+                                               WriterOptions (..),
+                                               compileTemplate, def,
+                                               extensionsFromList, lookupMeta,
+                                               pandocExtensions, readMarkdown,
+                                               readerExtensions, renderTemplate,
+                                               runPure, writeHtml5String,
+                                               writerExtensions)
+import           Text.Pandoc.Highlighting     (zenburn)
+import           Text.Pandoc.Shared           (stringify)
+import           Text.Pretty.Simple           (pShow)
+
+import           Milkshake.Types
 
 data Configuration = Configuration { configSitemap     :: FilePath
                                    , configShouldClean :: Bool
@@ -82,15 +100,15 @@ run args = do
 --------------------------------------------------------------------------------
 -- Pandoc
 --------------------------------------------------------------------------------
-extExtensions :: String -> S.Set Extension
-extExtensions ".md" = S.filter (/= Ext_literate_haskell) allMyPandocExtensions
+extExtensions :: String -> [Extension]
+extExtensions ".md" = filter (/= Ext_literate_haskell) allMyPandocExtensions
 extExtensions _     = allMyPandocExtensions
 
-allMyPandocExtensions :: S.Set Extension
-allMyPandocExtensions = S.fromList [ Ext_link_attributes
-                                   , Ext_mmd_link_attributes
-                                   , Ext_literate_haskell
-                                   ]
+allMyPandocExtensions :: [Extension]
+allMyPandocExtensions = [ Ext_link_attributes
+                        , Ext_mmd_link_attributes
+                        , Ext_literate_haskell
+                        ]
 
 stringifyHTML :: MetaValue -> Value
 stringifyHTML = String . T.pack {-. escapeStringForXML-} . stringify
@@ -103,29 +121,43 @@ metaLookup = ((stringify <$>) .) . lookupMeta
 --------------------------------------------------------------------------------
 -- Rendering
 --------------------------------------------------------------------------------
+renderPageToVars :: RenderablePage -> Either PandocError (HM.HashMap Text Value)
+renderPageToVars (RenderablePage pandoc@(Pandoc meta _)) = do
+  let opts :: WriterOptions
+      opts = def{ writerExtensions = extensionsFromList allMyPandocExtensions <> pandocExtensions
+                  , writerHighlightStyle = Just zenburn
+                  --, writerHtml5 = True
+                  --, writerStandalone = False
+                  }
+  body <- runPure
+    $ writeHtml5String
+        opts
+        pandoc
+  toc <- runPure
+    $ writeHtml5String
+        opts { writerTemplate = Just "$toc$"
+             --,writerStandalone = True
+             , writerTableOfContents = True
+             }
+        pandoc
+  let vars = HM.fromList [ ("body", String body)
+                         , ("toc", String toc)
+                         ]
+
+      accum acc k v = HM.insert (T.pack k) (stringifyHTML v) acc
+      metaVars = M.foldlWithKey accum HM.empty $ unMeta meta
+      allVars = metaVars <> vars
+  return allVars
+
+
 newtype RenderablePage = RenderablePage Pandoc
 
 instance ToJSON RenderablePage where
-  toJSON (RenderablePage pandoc@(Pandoc meta _)) =
-    let opts  = def{ writerExtensions = allMyPandocExtensions <> pandocExtensions
-                   , writerHighlight = True
-                   , writerHtml5 = True
-                  -- , writerHighlightStyle = zenburn
-                   , writerStandalone = False
-                   }
-        body = String $ T.pack $ writeHtmlString opts pandoc
-        toc = String $ T.pack $ writeHtmlString opts{writerTemplate = "$toc$"
-                                                    ,writerStandalone = True
-                                                    ,writerTableOfContents = True
-                                                    } pandoc
-        vars = HM.fromList [ ("body", body)
-                           , ("toc", toc)
-                           ]
+  toJSON page = case renderPageToVars page of
+    Right vs -> Object vs
+    -- TODO: Fix ToJSON RenderablePage - throwing an error in pure code
+    Left err -> error $ show err
 
-        accum acc k v = HM.insert (T.pack k) (stringifyHTML v) acc
-        metaVars = M.foldlWithKey accum HM.empty $ unMeta meta
-        allVars = metaVars <> vars
-    in Object allVars
 
 backupTemplate :: Text
 backupTemplate =
@@ -138,6 +170,8 @@ renderTemplateTextWith template val =
 renderPage :: RenderablePage -> Text -> Either String String
 renderPage page template =
   renderTemplateTextWith template $ toJSON page
+
+
 --------------------------------------------------------------------------------
 -- Compiling
 --------------------------------------------------------------------------------
@@ -166,18 +200,20 @@ compilePage prefix page = case pageSourcePath page of
     PageOpPandoc -> do
       let dest = prefix </> pageName page
       putStrLn $ "  Pandoc'ing to file " ++ dest
-      let reader = readMarkdownWithWarnings myOpts
+      let reader = runPure . readMarkdown myOpts
           ext    = maybe ".md" takeExtension $ M.lookup "source" $ pageMeta page
-          myOpts = def{ readerExtensions = extExtensions ext <> pandocExtensions
-                      , readerSmart = True
+          myOpts = def{ readerExtensions =
+                             extensionsFromList (extExtensions ext)
+                          <> pandocExtensions
+                          <> extensionsFromList [Ext_smart]
                       }
       putStrLn $ "  Using extensions for " ++ show ext
-      (Pandoc (Meta meta) blocks, ws) <-
-        case reader $ C8.unpack $ C8.fromStrict file of
+      Pandoc (Meta meta) blocks <-
+        case reader $ T.decodeUtf8 file of
           Left er -> putStrLn "Milkshake error: " >> print er >> exitFailure
           Right p -> return p
 
-      unless (null ws) $ putStrLn $ unlines $ "WARNINGS: ":ws
+      --unless (null ws) $ putStrLn $ unlines $ "WARNINGS: ":ws
 
       -- mix the page meta in with meta
       let pmeta   = inlines <$> pageMeta page
