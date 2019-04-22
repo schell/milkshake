@@ -1,7 +1,6 @@
 module Main where
 
-import           Milkshake.Compile
-import           System.Environment
+import qualified Milkshake.Compile as MS
 
 main :: IO ()
-main = getArgs >>= run
+main = MS.run
