@@ -5,6 +5,7 @@
 module Milkshake.Compile
   ( run
   , compile
+  , milkshakeCommand
   ) where
 
 import           Control.Applicative        ((<|>))
