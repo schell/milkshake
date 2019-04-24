@@ -1,4 +1,3 @@
-{-# LANGUAGE DeriveGeneric #-}
 module Milkshake
  ( module M
  ) where

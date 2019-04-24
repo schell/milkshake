@@ -15,29 +15,40 @@ import           Data.Aeson
 import qualified Data.ByteString            as B
 import qualified Data.ByteString.Lazy.Char8 as C8
 import           Data.Map                   (Map)
+import           Data.Text                  (Text)
 import qualified Data.Text                  as T
 import           Data.Yaml                  (ParseException, decodeFileEither)
 import           Data.Yaml.Pretty
 import           GHC.Generics
+
+
 --------------------------------------------------------------------------------
 -- SourcePath
 --------------------------------------------------------------------------------
+
+
 data SourcePath = LocalPath FilePath
-                | RemotePath String
                 | InMemory B.ByteString
-                deriving (Show, Eq, Generic)
+                deriving (Eq, Generic)
+
+
+instance Show SourcePath where
+  show (LocalPath fp) = "LocalPath " ++ show fp
+  show (InMemory _)  = "InMemory _"
+
 
 instance ToJSON SourcePath where
-  toJSON (LocalPath path)  = object ["localPath" .= path]
-  toJSON (RemotePath path) = object ["remotePath" .= path]
-  toJSON (InMemory file)   = object ["inMemory" .= B.unpack file]
+  toJSON (LocalPath path) = object ["localPath" .= path]
+  toJSON (InMemory file)  = object ["inMemory" .= B.unpack file]
+
 
 instance FromJSON SourcePath where
-  parseJSON (Object v) = local <|> remote <|> mem
+  parseJSON (Object v) = local <|> mem
     where local  = LocalPath <$> v .: "localPath"
-          remote = RemotePath <$> v .: "remotePath"
           mem    = InMemory . B.pack <$> v .: "inMemory"
   parseJSON e = fail ("Could not parse " ++ show e)
+
+
 --------------------------------------------------------------------------------
 -- PageOp
 --------------------------------------------------------------------------------
@@ -45,47 +56,68 @@ data PageOp = PageOpCopy
             | PageOpPandoc
             deriving (Show, Eq, Generic)
 
-instance ToJSON PageOp where
-  toJSON = String . T.pack . show
 
-instance FromJSON PageOp where
-  parseJSON (String "PageOpCopy")   = return PageOpCopy
-  parseJSON (String "PageOpPandoc") = return PageOpPandoc
-  parseJSON e                       = fail ("Could not parse " ++ show e)
+instance ToJSON PageOp where
+  toEncoding = genericToEncoding defaultOptions
+
+
+instance FromJSON PageOp
+
+
 --------------------------------------------------------------------------------
 -- Page
 --------------------------------------------------------------------------------
+
+
+-- TODO: Use NonEmpty instead of [PageOp]
+
+
 data Page = Page { pageName       :: String
                  , pageSourcePath :: SourcePath
                  , pageMeta       :: Map String String
-                 , pageOp         :: PageOp
+                 , pageDerivation :: [Text]
+                 , pageOp        :: PageOp
                  } deriving (Show, Eq, Generic)
+
 
 instance ToJSON Page where
   toEncoding = genericToEncoding defaultOptions
 
+
 instance FromJSON Page where
-  parseJSON (Object v) = Page <$> v .: "pageName"
-                              <*> v .: "pageSourcePath"
-                              <*> (v .: "pageMeta" <|> return mempty)
-                              <*> (v .: "pageOp" <|> return PageOpPandoc)
+  parseJSON (Object v) =
+    Page
+    <$> v .: "pageName"
+    <*> v .: "pageSourcePath"
+    <*> (v .: "pageMeta" <|> return mempty)
+    <*> (v .: "pageDerivation" <|> return mempty)
+    <*> (v .: "pageOp" <|> return PageOpPandoc)
   parseJSON e = fail $ "Could not decode " ++ show e
+
+
 --------------------------------------------------------------------------------
 -- Dir
 --------------------------------------------------------------------------------
+
+
 data BulkOperation = Operation { operationExtFrom :: String
                                , operationExtTo   :: String
                                , operationPageOp  :: PageOp
                                } deriving (Show, Eq, Generic)
 
+
 instance ToJSON BulkOperation where
   toEncoding = genericToEncoding defaultOptions
 
+
 instance FromJSON BulkOperation where
-  parseJSON (Object v) = Operation <$> v .: "operationExtFrom"
-                                   <*> v .: "operationExtTo"
-                                   <*> v .: "operationPageOp"
+  parseJSON (Object v) =
+    Operation
+    <$> v .: "operationExtFrom"
+    <*> v .: "operationExtTo"
+    <*> v .: "operationPageOp"
   parseJSON e = fail $ "Could not decode " ++ show e
+
 
 data Dir = Dir { dirName    :: String
                , dirFiles   :: [Page]
@@ -96,6 +128,7 @@ data Dir = Dir { dirName    :: String
                          , dirOpMap    :: [BulkOperation]
                          }
          deriving (Show, Eq, Generic)
+
 
 instance ToJSON Dir where
   toJSON (DirCopiedFrom dir ex opmap) = object [ "dirCopiedFrom" .= dir
@@ -108,6 +141,7 @@ instance ToJSON Dir where
            , "dirSubdirs" .= subdirs
            ]
 
+
 instance FromJSON Dir where
   parseJSON (Object v) = copied <|> explicit
     where copied   = DirCopiedFrom <$> v .: "dirCopiedFrom"
@@ -117,12 +151,16 @@ instance FromJSON Dir where
                          <*> (v .: "dirFiles" <|> return mempty)
                          <*> (v .: "dirSubdirs" <|> return mempty)
   parseJSON e = fail $ "Could not decode " ++ show e
+
+
 --------------------------------------------------------------------------------
 -- An Example Site
 --------------------------------------------------------------------------------
+
+
 exampleSite :: Dir
 exampleSite = Dir "root" [index] [img,css,singleArticle,articles]
-  where index = Page "index.html" (LocalPath "content/index.md") mempty PageOpPandoc
+  where index = Page "index.html" (LocalPath "content/index.md") mempty mempty PageOpPandoc
         img   = DirCopiedFrom "img" [".DS_Store"] []
         css   = DirCopiedFrom "css" [".DS_Store"] []
         articles = DirCopiedFrom "articles" [".DS_Store"]
@@ -132,13 +170,31 @@ exampleSite = Dir "root" [index] [img,css,singleArticle,articles]
                      }
           ]
 
+
 singleArticle :: Dir
-singleArticle = Dir "single-article" [Page "index.html" path mempty PageOpPandoc] []
-  where path = RemotePath "https://raw.githubusercontent.com/schell/odin/8c7296fbd95bd92a40aedb06938c76174fe3e699/src/Part-One.lhs"
+singleArticle =
+  Dir
+    "single-article"
+    [ Page
+        "index.html"
+        (LocalPath "Part-One.lhs")
+        mempty
+        derive
+        PageOpPandoc
+    ]
+    []
+  where derive =
+          pure
+          $ T.unwords
+            [ "wget -o Part-One.lhs"
+            , "https://raw.githubusercontent.com/schell/odin/8c7296fbd95bd92a40aedb06938c76174fe3e699/src/Part-One.lhs"
+            ]
+
 
 printExampleSite :: IO ()
 printExampleSite =
   C8.putStrLn $ C8.fromStrict $ encodePretty defConfig exampleSite
+
 
 decodeDirFromFile :: FilePath -> IO (Either ParseException Dir)
 decodeDirFromFile = decodeFileEither

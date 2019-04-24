@@ -12,18 +12,14 @@ import           Control.Applicative        ((<|>))
 import           Control.Monad              (forM_, join, msum, unless, when)
 import           Data.Aeson                 hiding (Success)
 import qualified Data.ByteString            as B
-import qualified Data.ByteString.Lazy.Char8 as C8
 import           Data.Char                  (toLower)
 import qualified Data.HashMap.Strict        as HM
 import           Data.List                  (intercalate, intersect, isSuffixOf)
 import qualified Data.Map.Lazy              as M
-import           Data.String                (fromString)
 import           Data.Text                  (Text)
 import qualified Data.Text                  as T
 import qualified Data.Text.Encoding         as T
 import qualified Data.Text.Lazy             as LT
-import           Network.HTTP.Client        (httpLbs, newManager, responseBody)
-import           Network.HTTP.Client.TLS    (tlsManagerSettings)
 import           Options.Applicative        (InfoMod, Parser, ParserInfo,
                                              execParser, fullDesc, header, help,
                                              helper, info, long, metavar,
@@ -52,8 +48,12 @@ import           Text.Pandoc                (Extension (..), Inline (..),
 import           Text.Pandoc.Highlighting   (zenburn)
 import           Text.Pandoc.Shared         (stringify)
 import           Text.Pretty.Simple         (pShow)
+import           Turtle                     (ExitCode (..), empty, repr, shell)
 
 import           Milkshake.Types
+
+
+-- TODO: Get out of the business of pandoc - let the commandline handle that.
 
 
 data Configuration
@@ -208,73 +208,103 @@ renderPage page template =
 --------------------------------------------------------------------------------
 
 
+-- | Display the shell command to the user.
+displayCmd :: Text -> IO ()
+displayCmd cmd =
+  putStrLn
+    $ unwords
+      [ "Running"
+      , show $ T.unpack cmd
+      ]
+
+
+-- | Run the page derivation (just shell commands).
+-- This performs a serias of shell commands which are supposed to create a
+-- local representation of the page.
+derivePage :: [Text] -> IO (Maybe String)
+derivePage [] = return Nothing
+derivePage (cmd:cmds) = displayCmd cmd >> shell cmd empty >>= \case
+  ExitSuccess -> derivePage cmds
+  ExitFailure n ->
+    return
+      $ Just
+      $ "pageDerivation error: "
+        <> repr n
+
+
+
 compilePage :: FilePath -> Page -> IO ()
-compilePage prefix page = case pageSourcePath page of
-  LocalPath pth  -> do
-    putStrLn $ "Reading local file " ++ pth
-    file <- B.readFile pth
-    compilePage prefix page{pageSourcePath=InMemory file
-                           ,pageMeta=M.insert "source" pth $ pageMeta page
-                           }
-  RemotePath pth -> do
-    putStrLn $ "Reading remote file " ++ pth
-    mngr <- newManager tlsManagerSettings
-    let req = fromString pth
-    body <- C8.toStrict . responseBody <$> httpLbs req mngr
-    compilePage prefix page{pageSourcePath=InMemory body
-                           ,pageMeta=M.insert "source" pth $ pageMeta page
-                           }
-  InMemory file -> case pageOp page of
-    PageOpCopy   -> do
-      let dest = prefix </> pageName page
-      putStrLn $ "  Copying to file " ++ dest
-      B.writeFile dest file
-      putStrLn "  Done."
-    PageOpPandoc -> do
-      let dest = prefix </> pageName page
-      putStrLn $ "  Pandoc'ing to file " ++ dest
-      let reader = runPure . readMarkdown myOpts
-          ext    = maybe ".md" takeExtension $ M.lookup "source" $ pageMeta page
-          myOpts = def{ readerExtensions =
-                             extensionsFromList (extExtensions ext)
-                          <> pandocExtensions
-                          <> extensionsFromList [Ext_smart]
-                      }
-      putStrLn $ "  Using extensions for " ++ show ext
-      Pandoc (Meta meta) blocks <-
-        case reader $ T.decodeUtf8 file of
-          Left er -> putStrLn "Milkshake error: " >> print er >> exitFailure
-          Right p -> return p
+compilePage prefix page = do
+  putStrLn
+    $ LT.unpack
+    $ LT.unlines
+      [ "compilePage"
+      , "  " <> pShow prefix
+      , "  " <> pShow page
+      ]
+  case pageSourcePath page of
+    LocalPath pth  -> do
+      unless (null $ pageDerivation page) $ do
+        putStrLn $ "Running derivation for file " ++ pth
+        mayErr <- derivePage $ pageDerivation page
+        sequence_ $ fail <$> mayErr
 
-      --unless (null ws) $ putStrLn $ unlines $ "WARNINGS: ":ws
+      putStrLn $ "Reading local file " ++ pth
+      file <- B.readFile pth
+      compilePage prefix page{pageSourcePath=InMemory file
+                             ,pageMeta=M.insert "source" pth $ pageMeta page
+                             }
+    InMemory file -> case pageOp page of
+      PageOpCopy   -> do
+        let dest = prefix </> pageName page
+        putStrLn $ "  Copying to file " ++ dest
+        B.writeFile dest file
+        putStrLn "  Done."
+      PageOpPandoc -> do
+        let dest = prefix </> pageName page
+        putStrLn $ "  Pandoc'ing to file " ++ dest
+        let reader = runPure . readMarkdown myOpts
+            ext    = maybe ".md" takeExtension $ M.lookup "source" $ pageMeta page
+            myOpts = def{ readerExtensions =
+                              extensionsFromList (extExtensions ext)
+                            <> pandocExtensions
+                            <> extensionsFromList [Ext_smart]
+                        }
+        putStrLn $ "  Using extensions for " ++ show ext
+        Pandoc (Meta meta) blocks <-
+          case reader $ T.decodeUtf8 file of
+            Left er -> putStrLn "Milkshake error: " >> print er >> exitFailure
+            Right p -> return p
 
-      -- mix the page meta in with meta
-      let pmeta   = inlines <$> pageMeta page
-          allMeta = Meta $ meta <> pmeta
+        --unless (null ws) $ putStrLn $ unlines $ "WARNINGS: ":ws
 
-      template <- case metaLookup "theme" allMeta of
-        Nothing    -> return backupTemplate
-        Just theme -> doesFileExist theme >>= \case
-          False -> do
-            putStrLn $ unwords [ "  Theme file"
-                               , show theme
-                               , "does not exist"
-                               ]
+        -- mix the page meta in with meta
+        let pmeta   = inlines <$> pageMeta page
+            allMeta = Meta $ meta <> pmeta
+
+        template <- case metaLookup "theme" allMeta of
+          Nothing    -> return backupTemplate
+          Just theme -> doesFileExist theme >>= \case
+            False -> do
+              putStrLn $ unwords [ "  Theme file"
+                                , show theme
+                                , "does not exist"
+                                ]
+              exitFailure
+            True  -> do
+              putStrLn $ unwords [ "  Using theme"
+                                , show theme
+                                ]
+              T.pack <$> readFile theme
+
+        let rpage = RenderablePage $ Pandoc allMeta blocks
+        case renderPage rpage template of
+          Left er -> do
+            putStrLn $ "  Failed: " ++ LT.unpack (pShow er)
             exitFailure
-          True  -> do
-            putStrLn $ unwords [ "  Using theme"
-                               , show theme
-                               ]
-            T.pack <$> readFile theme
-
-      let rpage = RenderablePage $ Pandoc allMeta blocks
-      case renderPage rpage template of
-        Left er -> do
-          putStrLn $ "  Failed: " ++ LT.unpack (pShow er)
-          exitFailure
-        Right html -> do
-          writeFile dest html
-          putStrLn "  Done."
+          Right html -> do
+            writeFile dest html
+            putStrLn "  Done."
 
 
 -- | Check to see if the pathA's last comp is also pathB's first comp, if so
@@ -329,6 +359,7 @@ compile prePrefix page@(DirCopiedFrom dir excludes opmap) = do
                     then return Page{ pageName = takeBaseName dest -<.> newExt
                                     , pageSourcePath = LocalPath from
                                     , pageMeta       = mempty
+                                    , pageDerivation = []
                                     , pageOp         = op
                                     }
                     else fail ""
@@ -340,6 +371,7 @@ compile prePrefix page@(DirCopiedFrom dir excludes opmap) = do
                     Page{ pageName       = dropExtensions (takeFileName dest) -<.> takeExtensions from
                         , pageSourcePath = LocalPath from
                         , pageMeta       = mempty
+                        , pageDerivation = []
                         , pageOp         = PageOpCopy
                         }
                 Just pageToCompile -> compilePage prefixDir pageToCompile

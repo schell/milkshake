@@ -4,16 +4,16 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: abb2e5eb172fbe3754816516b986bf7cc519b666d551f7ce794fa19e60e21d1f
+-- hash: db9c97861991676d70d192343274efd09d7f891803de92a2337063b39ae52a6e
 
 name:           milkshake
-version:        0.2.0.0
+version:        0.3.0.0
 synopsis:       The milkshake website generator
 category:       Web
 homepage:       http://github.com/schell/milkshake
 author:         Schell Scivally
 maintainer:     efsubenovex@gmail.com
-copyright:      2018 Schell Scivally
+copyright:      2018-2019 Schell Scivally
 license:        MIT
 license-file:   LICENSE
 build-type:     Simple
@@ -47,6 +47,7 @@ library
     , pretty-simple
     , text
     , transformers
+    , turtle
     , unordered-containers
     , xml
     , yaml
@@ -79,6 +80,7 @@ executable milkshake-cli
     , pretty-simple
     , text
     , transformers
+    , turtle
     , unordered-containers
     , xml
     , yaml

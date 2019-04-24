@@ -1,12 +1,12 @@
 name:                milkshake
-version:             0.2.0.0
+version:             0.3.0.0
 synopsis:            "The milkshake website generator"
 #description:
 homepage:            "http://github.com/schell/milkshake"
 license-file:        LICENSE
 author:              "Schell Scivally"
 maintainer:          "efsubenovex@gmail.com"
-copyright:           "2018 Schell Scivally"
+copyright:           "2018-2019 Schell Scivally"
 category:            Web
 build-type:          Simple
 
@@ -29,6 +29,7 @@ dependencies:
 - pretty-simple
 - text
 - transformers
+- turtle
 - unordered-containers
 - xml
 - yaml
