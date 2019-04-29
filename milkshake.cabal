@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: db9c97861991676d70d192343274efd09d7f891803de92a2337063b39ae52a6e
+-- hash: ba7a23f770f7995fff5d64c20eb253f4949d45487cf2fb38fcd6fd6d3e2422bc
 
 name:           milkshake
 version:        0.3.0.0
@@ -40,6 +40,7 @@ library
     , highlighting-kate
     , http-client
     , http-client-tls
+    , mtl
     , network-uri
     , optparse-applicative
     , pandoc
@@ -73,6 +74,7 @@ executable milkshake-cli
     , http-client
     , http-client-tls
     , milkshake
+    , mtl
     , network-uri
     , optparse-applicative
     , pandoc

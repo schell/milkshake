@@ -22,6 +22,7 @@ dependencies:
 - HTTP
 - http-client
 - http-client-tls
+- mtl
 - network-uri
 - optparse-applicative
 - pandoc
