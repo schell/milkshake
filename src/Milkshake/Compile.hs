@@ -296,7 +296,7 @@ compilePage prefix page = do
             putStrLn $ "  Failed: " ++ LT.unpack (pShow er)
             exitFailure
           Right html -> do
-            writeFile dest html
+            B.writeFile dest $ T.encodeUtf8 html
             putStrLn "  Done."
 
 
