@@ -207,7 +207,7 @@ displayCmd cmd =
 
 
 -- | Run the page derivation (just shell commands).
--- This performs a serias of shell commands which are supposed to create a
+-- This performs a series of shell commands which are supposed to create a
 -- local representation of the page.
 derivePage :: [Text] -> IO (Maybe String)
 derivePage [] = return Nothing
@@ -218,7 +218,6 @@ derivePage (cmd:cmds) = displayCmd cmd >> shell cmd empty >>= \case
       $ Just
       $ "pageDerivation error: "
         <> repr n
-
 
 
 compilePage :: FilePath -> Page -> IO ()
@@ -316,7 +315,42 @@ compile
   -> Dir
   -- ^ The immediate/relative next directory
   -> IO ()
-compile prePrefix page@(DirCopiedFrom dir excludes opmap) = do
+compile prefixDir (DirCopiedFrom (ExternalZip loc) _ _) = do
+  let
+    doCommand cmd errMsg = do
+      putStrLn
+        $ "> " <> T.unpack cmd
+      isOk <- shell cmd empty
+      unless (isOk == ExitSuccess)
+        $ putStrLn errMsg >> exitFailure
+
+  putStrLn
+    $ "Downloading external zip from " ++ show loc
+  doCommand (T.pack $ "wget " ++ loc) "  download failed"
+
+  createDirectoryIfMissing True prefixDir
+
+  let zipFile = takeFileName loc
+  putStrLn
+    $ "  unzipping "
+      <> show zipFile
+  doCommand
+    ( T.unwords
+        [ "unzip"
+        , T.pack zipFile
+        , "-d"
+        , T.pack prefixDir
+        ]
+    )
+    "  unzip failed"
+
+  putStrLn
+    $ "  cleaning up zip "
+      <> show zipFile
+  doCommand
+    ("rm " <> T.pack zipFile)
+    "  could not clean up zip file"
+compile prePrefix page@(DirCopiedFrom (LocalDir dir) excludes opmap) = do
   -- If prefix /= prePrefix it's most likely that the user has already copied
   -- from a local dir and is now adding some custom stuff to it, and we don't
   -- want to create another nested dir.
@@ -339,7 +373,7 @@ compile prePrefix page@(DirCopiedFrom dir excludes opmap) = do
           doesDirectoryExist from >>= \case
             True -> do
               createDirectoryIfMissing True dest
-              compile prefixDir (DirCopiedFrom from excludes opmap)
+              compile prefixDir (DirCopiedFrom (LocalDir from) excludes opmap)
             False -> do
               createDirectoryIfMissing True prefixDir
               let mpage = msum $ flip map opmap $ \(Operation opFromExt opToExt op) -> do
@@ -369,7 +403,6 @@ compile prePrefix page@(DirCopiedFrom dir excludes opmap) = do
                         }
                 Just pageToCompile -> compilePage prefixDir pageToCompile
     else putStrLn ("  " ++ show dir ++ "is not a directory") >> exitFailure
-
 compile prefix site = do
   putStrLn $ LT.unpack $ LT.unlines ["compile", "  " <> pShow prefix, "  " <> pShow site]
   let dir       = dirName site

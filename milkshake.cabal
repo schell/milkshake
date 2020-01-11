@@ -1,10 +1,10 @@
 cabal-version: 1.12
 
--- This file has been generated from package.yaml by hpack version 0.30.0.
+-- This file has been generated from package.yaml by hpack version 0.31.2.
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: ba7a23f770f7995fff5d64c20eb253f4949d45487cf2fb38fcd6fd6d3e2422bc
+-- hash: cdc203f4708792bbd88eaa64b9926c1ff0bed5107fa17c3fb1074f02a9252e03
 
 name:           milkshake
 version:        0.3.0.0
@@ -27,7 +27,7 @@ library
       Paths_milkshake
   hs-source-dirs:
       src
-  ghc-options: -Wall -threaded
+  ghc-options: -Wall -Werror -threaded
   build-depends:
       HTTP
     , aeson

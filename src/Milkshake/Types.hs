@@ -5,6 +5,7 @@ module Milkshake.Types
   , PageOp(..)
   , Page(..)
   , Dir(..)
+  , DirLocation(..)
   , BulkOperation(..)
   , printExampleSite
   , decodeDirFromFile
@@ -12,9 +13,11 @@ module Milkshake.Types
 
 import           Control.Applicative        ((<|>))
 import           Data.Aeson
+import           Data.Aeson.Types           (typeMismatch)
 import qualified Data.ByteString            as B
 import qualified Data.ByteString.Lazy.Char8 as C8
 import           Data.Map                   (Map)
+import           Data.String                (IsString (..))
 import           Data.Text                  (Text)
 import qualified Data.Text                  as T
 import           Data.Yaml                  (ParseException, decodeFileEither)
@@ -34,7 +37,7 @@ data SourcePath = LocalPath FilePath
 
 instance Show SourcePath where
   show (LocalPath fp) = "LocalPath " ++ show fp
-  show (InMemory _)  = "InMemory _"
+  show (InMemory _)   = "InMemory _"
 
 
 instance ToJSON SourcePath where
@@ -76,7 +79,7 @@ data Page = Page { pageName       :: String
                  , pageSourcePath :: SourcePath
                  , pageMeta       :: Map String String
                  , pageDerivation :: [Text]
-                 , pageOp        :: PageOp
+                 , pageOp         :: PageOp
                  } deriving (Show, Eq, Generic)
 
 
@@ -119,13 +122,45 @@ instance FromJSON BulkOperation where
   parseJSON e = fail $ "Could not decode " ++ show e
 
 
+data DirLocation
+  = LocalDir FilePath
+  | ExternalZip String
+  deriving (Eq, Show)
+
+
+instance FromJSON DirLocation where
+  parseJSON (String s) =
+    return
+      $ LocalDir
+      $ T.unpack s
+  parseJSON (Object v) =
+    local <|> external
+    where
+      local =
+        LocalDir
+        <$> (v .: "localDir")
+      external =
+        ExternalZip
+        <$> (v .: "externalZippedDir")
+  parseJSON v = typeMismatch "DirLocation" v
+
+
+instance ToJSON DirLocation where
+  toJSON (LocalDir s)    = object ["localDir" .= T.pack s]
+  toJSON (ExternalZip s) = object ["externalZippedDir" .= T.pack s]
+
+
+instance IsString DirLocation where
+  fromString = LocalDir
+
+
 data Dir = Dir { dirName    :: String
                , dirFiles   :: [Page]
                , dirSubdirs :: [Dir]
                }
-         | DirCopiedFrom { dirName     :: FilePath
-                         , dirExcludes :: [String]
-                         , dirOpMap    :: [BulkOperation]
+         | DirCopiedFrom { dirCopiedFrom :: DirLocation
+                         , dirExcludes   :: [String]
+                         , dirOpMap      :: [BulkOperation]
                          }
          deriving (Show, Eq, Generic)
 
@@ -159,10 +194,15 @@ instance FromJSON Dir where
 
 
 exampleSite :: Dir
-exampleSite = Dir "root" [index] [img,css,singleArticle,articles]
+exampleSite = Dir "root" [index] [img,css,singleArticle,articles,zipd]
   where index = Page "index.html" (LocalPath "content/index.md") mempty mempty PageOpPandoc
         img   = DirCopiedFrom "img" [".DS_Store"] []
         css   = DirCopiedFrom "css" [".DS_Store"] []
+        zipd  =
+          DirCopiedFrom
+            (ExternalZip "https://zyghost-guides.s3-us-west-2.amazonaws.com/intro-to-rust-web.zip")
+            [".DS_Store"]
+            []
         articles = DirCopiedFrom "articles" [".DS_Store"]
           [Operation { operationExtFrom = "md"
                      , operationExtTo = "html"
