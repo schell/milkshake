@@ -315,41 +315,23 @@ compile
   -> Dir
   -- ^ The immediate/relative next directory
   -> IO ()
-compile prefixDir (DirCopiedFrom (ExternalZip loc) _ _) = do
+compile prefixDir (DirCopiedFrom (ExternalDir cmds) _ _) = do
   let
-    doCommand cmd errMsg = do
-      putStrLn
-        $ "> " <> T.unpack cmd
-      isOk <- shell cmd empty
+    doCommand errMsg cmd = do
+      putStrLn $ "> " <> cmd
+      let
+        textCmd = T.pack cmd
+        cmdAndEnv =
+          T.unwords
+            [ "milkshake_dir_prefix=" `T.append` T.pack prefixDir
+            , textCmd
+            ]
+      isOk <- shell cmdAndEnv empty
       unless (isOk == ExitSuccess)
         $ putStrLn errMsg >> exitFailure
-
-  putStrLn
-    $ "Downloading external zip from " ++ show loc
-  doCommand (T.pack $ "wget " ++ loc) "  download failed"
-
   createDirectoryIfMissing True prefixDir
-
-  let zipFile = takeFileName loc
-  putStrLn
-    $ "  unzipping "
-      <> show zipFile
-  doCommand
-    ( T.unwords
-        [ "unzip"
-        , T.pack zipFile
-        , "-d"
-        , T.pack prefixDir
-        ]
-    )
-    "  unzip failed"
-
-  putStrLn
-    $ "  cleaning up zip "
-      <> show zipFile
-  doCommand
-    ("rm " <> T.pack zipFile)
-    "  could not clean up zip file"
+  putStrLn "Generating dir from commands..."
+  sequence_ $ doCommand "  command failed" <$> cmds
 compile prePrefix page@(DirCopiedFrom (LocalDir dir) excludes opmap) = do
   -- If prefix /= prePrefix it's most likely that the user has already copied
   -- from a local dir and is now adding some custom stuff to it, and we don't

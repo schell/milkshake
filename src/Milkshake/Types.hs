@@ -122,9 +122,13 @@ instance FromJSON BulkOperation where
   parseJSON e = fail $ "Could not decode " ++ show e
 
 
+-- | Either a local directory or a series of bash commands to generate a directory.
+-- When using ExternalDir, the series of bash commands will have the following
+-- environment variables available:
+-- * `milkshake_dir_prefix` - the prefix of the directory
 data DirLocation
   = LocalDir FilePath
-  | ExternalZip String
+  | ExternalDir [String]
   deriving (Eq, Show)
 
 
@@ -140,14 +144,14 @@ instance FromJSON DirLocation where
         LocalDir
         <$> (v .: "localDir")
       external =
-        ExternalZip
-        <$> (v .: "externalZippedDir")
+        ExternalDir
+        <$> v .: "dirDerivation"
   parseJSON v = typeMismatch "DirLocation" v
 
 
 instance ToJSON DirLocation where
   toJSON (LocalDir s)    = object ["localDir" .= T.pack s]
-  toJSON (ExternalZip s) = object ["externalZippedDir" .= T.pack s]
+  toJSON (ExternalDir cmds) = object ["dirDerivation" .= cmds]
 
 
 instance IsString DirLocation where
@@ -200,7 +204,12 @@ exampleSite = Dir "root" [index] [img,css,singleArticle,articles,zipd]
         css   = DirCopiedFrom "css" [".DS_Store"] []
         zipd  =
           DirCopiedFrom
-            (ExternalZip "https://zyghost-guides.s3-us-west-2.amazonaws.com/intro-to-rust-web.zip")
+            ( ExternalDir
+                [ "wget https://zyghost-guides.s3-us-west-2.amazonaws.com/intro-to-rust-web.zip"
+                , "unzip intro-to-rust-web.zip -d $milkshake_dir_prefix"
+                , "rm intro-to-rust-web.zip"
+                ]
+            )
             [".DS_Store"]
             []
         articles = DirCopiedFrom "articles" [".DS_Store"]

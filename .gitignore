@@ -6,5 +6,6 @@ cabal.sandbox.config
 dist/
 *.sw[a-z]
 .stack-work
+stack.yaml.lock
 build/
 TAGS
