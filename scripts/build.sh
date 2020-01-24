@@ -23,4 +23,6 @@ tar -czvf milkshake-cli.tar.gz milkshake-cli
 sleep 1
 rm milkshake-cli
 ls -lah milkshake-cli.tar.gz
+ls -lah
+pwd
 echo "Done building on ${GITHUB_REF}"
