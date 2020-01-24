@@ -9,3 +9,4 @@ dist/
 stack.yaml.lock
 build/
 TAGS
+milkshake-cli.tar.gz

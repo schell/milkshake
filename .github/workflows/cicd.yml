@@ -1,0 +1,45 @@
+name: build
+
+on: push
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v1
+
+    # cacheing
+    - name: stack
+      uses: actions/cache@v1
+      with:
+        path: /usr/local/bin/stack
+        key: ${{ runner.os }}-stack-exe
+
+    - name: Cache local stack
+      uses: actions/cache@v1
+      with:
+        path: ~/.stack
+        key: ${{ runner.os }}-stack-local-${{ hashFiles('stack.yaml.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-stack-local-
+
+    - name: Cache stack-work
+      uses: actions/cache@v1
+      with:
+        path: ~/.stack-work
+        key: ${{ runner.os }}-stack-work-${{ hashFiles('stack.yaml.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-stack-work-
+
+    - name: build
+      run: scripts/build.sh
+
+    - name: release
+      if: startsWith(github.ref, 'refs/tags/')
+      run: |
+        source scripts/ci.sh
+        tag=`basename ${{ github.ref }}`
+        create_release schell milkshake ${{ secrets.GITHUB_TOKEN }} $tag || exit 1
+        upload_release_file ${{ secrets.GITHUB_TOKEN }} milkshake-cli.tar.gz milkshake-cli.tar.gz || exit 1
